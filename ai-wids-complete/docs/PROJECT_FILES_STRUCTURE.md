@@ -10,7 +10,7 @@ This archive contains the complete AI-WIDS project with all scripts, configs, an
 
 _\# Extract the archive_  
 ```sh
-tar \-xzf ai-wids-project.tar.gz
+tar -xzf ai-wids-project.tar.gz
 ```
 _\# Navigate to project directory_  
 ```sh
@@ -18,7 +18,7 @@ cd ai-wids-complete
 ```
 _\# List all files_  
 ```sh
-ls \-la
+ls -la
 ```
 ## **📋 What’s Included**
 
@@ -93,9 +93,9 @@ _\# Option 1: Automated setup (recommended)_
 
 _\# Option 2: Manual setup_  
 ```sh
-python3 \-m venv venv  
+python3 -m venv venv  
 source venv/bin/activate  
-pip install \-r requirements.txt  
+pip install -r requirements.txt  
 ./scripts/run_training.sh mlp  
 ./scripts/run_inference_server.sh 8000
 ```
@@ -215,19 +215,27 @@ Change: host, port, logging
 After extraction, verify:
 
 _\# Check Python scripts_  
-ls src/\*.py  
+```sh
+ls src/*.py  
+```
 _\# Expected: 7 .py files \+ \_\_init\_\_.py_
 
 _\# Check shell scripts_  
-ls scripts/\*.sh  
+```sh
+ls scripts/*.sh  
+```
 _\# Expected: 5 .sh files_
 
 _\# Check configs_  
-ls config/\*.yaml  
+```sh
+ls config/*.yaml  
+```
 _\# Expected: 4 .yaml files_
 
 _\# Check permissions_  
-ls \-l scripts/\*.sh **|** grep "x"  
+```sh
+ls -l scripts/*.sh | grep "x"  
+```
 _\# All should be executable (x permission)_
 
 ## **🎬 Run Your First Demo**
@@ -235,20 +243,30 @@ _\# All should be executable (x permission)_
 Complete workflow in 5 commands:
 
 _\# 1\. Extract_  
-tar \-xzf ai-wids-complete-project.tar.gz  
+```sh
+tar -xzf ai-wids-complete-project.tar.gz  
 cd ai-wids-complete
+```
 
 _\# 2\. Setup_  
+```sh
 ./scripts/quick_start.sh
+```
 
 _\# 3\. Train (with sample data)_  
+```sh
 ./scripts/run_training.sh mlp
+```
 
 _\# 4\. Start server (Terminal 1\)_  
+```sh
 ./scripts/run_inference_server.sh 8000
+```
 
 _\# 5\. Run demo (Terminal 2\)_  
+```sh
 ./scripts/run_live_demo.sh 192.168.1.20
+```
 
 ## **📞 Support**
 
