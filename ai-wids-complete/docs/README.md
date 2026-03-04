@@ -8,13 +8,13 @@
 
 AI-WIDS is a machine learning-based wireless intrusion detection system that:
 
-* **Captures** WiFi traffic from UniFi U6+ access points
+- **Captures** WiFi traffic from UniFi U6+ access points
 
-* **Extracts** discriminative features from packets (802.11 \+ IP layers)
+- **Extracts** discriminative features from packets (802.11 \+ IP layers)
 
-* **Classifies** traffic as normal or attack using PyTorch neural networks
+- **Classifies** traffic as normal or attack using PyTorch neural networks
 
-* **Detects** intrusions in real-time with high accuracy (\>98%)
+- **Detects** intrusions in real-time with high accuracy (\>98%)
 
 ### **Features**
 
@@ -29,22 +29,28 @@ AI-WIDS is a machine learning-based wireless intrusion detection system that:
 
 ### **Prerequisites**
 
-* Ubuntu 22.04+ (or similar Linux)
+- Ubuntu 22.04+ (or similar Linux)
 
-* Python 3.10+
+- Python 3.10+
 
-* UniFi U6+ Access Point with SSH enabled
+- UniFi U6+ Access Point with SSH enabled
 
-* Two phones (for benign and attack traffic generation)
+- Two phones (for benign and attack traffic generation)
 
 ### **Installation**
 
-*\# Clone repository*  
-git clone https://github.com/yourusername/ai-wids.git  
-cd ai-wids
+_\# Clone repository_
 
-*\# Run quick start script (handles everything)*  
-./scripts/quick\_start.sh
+```sh
+git clone https://github.com/yourusername/ai-wids.git
+cd ai-wids
+```
+
+_\# Run quick start script (handles everything)_
+
+```sh
+./scripts/quick_start.sh
+```
 
 The quick start script will:
 
@@ -62,39 +68,46 @@ The quick start script will:
 
 If you prefer manual setup:
 
-*\# 1\. Create virtual environment*  
+_\# 1\. Create virtual environment_
+
 ```sh
-python3 \-m venv venv  
+python3 \-m venv venv
 source venv/bin/activate
 ```
 
-*\# 2\. Install dependencies*  
+_\# 2\. Install dependencies_
+
 ```sh
 pip install \-r requirements.txt
 ```
 
-*\# 3\. Create directory structure*  
+_\# 3\. Create directory structure_
+
 ```sh
 mkdir \-p data/{raw,processed,models} logs results
 ```
 
-*\# 4\. Collect packet captures*  
+_\# 4\. Collect packet captures_
+
 ```sh
-./scripts/capture\_pcap\_u6.sh 192.168.1.20 data/raw/normal\_1.pcap 120  
+./scripts/capture\_pcap\_u6.sh 192.168.1.20 data/raw/normal\_1.pcap 120
 ./scripts/capture\_pcap\_u6.sh 192.168.1.20 data/raw/attack\_1.pcap 120
 ```
 
-*\# 5\. Train model*  
+_\# 5\. Train model_
+
 ```sh
 ./scripts/run\_training.sh mlp
 ```
 
-*\# 6\. Start inference server*  
+_\# 6\. Start inference server_
+
 ```sh
 ./scripts/run\_inference\_server.sh 8000
 ```
 
-*\# 7\. Run live demo (in separate terminal)*  
+_\# 7\. Run live demo (in separate terminal)_
+
 ```sh
 ./scripts/run\_live\_demo.sh 192.168.1.20
 ```
@@ -102,35 +115,35 @@ mkdir \-p data/{raw,processed,models} logs results
 ## **Project Structure**
 
 ai-wids/  
-├── src/                    \# Source code  
-│   ├── pcap\_to\_features.py         \# PCAP → CSV feature extraction  
-│   ├── feature\_engineering.py      \# Preprocessing & scaling  
-│   ├── models.py                   \# PyTorch model architectures  
-│   ├── train\_pytorch.py            \# Training script  
-│   ├── inference\_server.py         \# Flask API server  
-│   ├── unifi\_remote\_sniffer.py     \# Live packet sniffer  
-│   └── evaluate\_model.py           \# Model evaluation  
-├── scripts/                \# Shell scripts  
-│   ├── capture\_pcap\_u6.sh          \# Capture from U6+  
-│   ├── quick\_start.sh              \# Complete setup  
-│   ├── run\_training.sh             \# Training pipeline  
-│   ├── run\_inference\_server.sh     \# Start API server  
-│   └── run\_live\_demo.sh            \# Live demonstration  
-├── config/                 \# Configuration files  
-│   ├── training\_config.yaml  
-│   ├── server\_config.yaml  
-│   ├── sniffer\_config.yaml  
-│   └── capture\_config.yaml  
-├── data/                   \# Data directories  
-│   ├── raw/                        \# Raw PCAP files  
-│   ├── processed/                  \# Preprocessed arrays  
-│   └── models/                     \# Trained models  
-├── logs/                   \# Log files  
-├── results/                \# Evaluation results  
-├── docs/                   \# Documentation  
-│   └── Live-Demo-Guide.md          \# Complete demo guide  
-├── requirements.txt        \# Python dependencies  
-└── README.md              \# This file
+├── src/ \# Source code  
+│ ├── pcap_to_features.py \# PCAP → CSV feature extraction  
+│ ├── feature_engineering.py \# Preprocessing & scaling  
+│ ├── models.py \# PyTorch model architectures  
+│ ├── train_pytorch.py \# Training script  
+│ ├── inference_server.py \# Flask API server  
+│ ├── unifi_remote_sniffer.py \# Live packet sniffer  
+│ └── evaluate_model.py \# Model evaluation  
+├── scripts/ \# Shell scripts  
+│ ├── capture_pcap_u6.sh \# Capture from U6+  
+│ ├── quick_start.sh \# Complete setup  
+│ ├── run_training.sh \# Training pipeline  
+│ ├── run_inference_server.sh \# Start API server  
+│ └── run_live_demo.sh \# Live demonstration  
+├── config/ \# Configuration files  
+│ ├── training_config.yaml  
+│ ├── server_config.yaml  
+│ ├── sniffer_config.yaml  
+│ └── capture_config.yaml  
+├── data/ \# Data directories  
+│ ├── raw/ \# Raw PCAP files  
+│ ├── processed/ \# Preprocessed arrays  
+│ └── models/ \# Trained models  
+├── logs/ \# Log files  
+├── results/ \# Evaluation results  
+├── docs/ \# Documentation  
+│ └── Live-Demo-Guide.md \# Complete demo guide  
+├── requirements.txt \# Python dependencies  
+└── README.md \# This file
 
 ## **Usage**
 
@@ -140,14 +153,16 @@ Collect labeled packet captures for training:
 
 **Normal Traffic:**
 
-*\# Phone A: Browse websites, stream video, use apps normally*  
+_\# Phone A: Browse websites, stream video, use apps normally_
+
 ```sh
 ./scripts/capture\_pcap\_u6.sh 192.168.1.20 data/raw/normal\_1.pcap 120
 ```
 
 **Attack Traffic:**
 
-*\# Phone B: Generate attacks (HTTP flood, reconnect bursts, scans)*  
+_\# Phone B: Generate attacks (HTTP flood, reconnect bursts, scans)_
+
 ```sh
 ./scripts/capture\_pcap\_u6.sh 192.168.1.20 data/raw/attack\_1.pcap 120
 ```
@@ -156,32 +171,35 @@ Collect labeled packet captures for training:
 
 Train a model on your labeled data:
 
-*\# Train MLP model (recommended)*  
+_\# Train MLP model (recommended)_
+
 ```sh
 ./scripts/run\_training.sh mlp
 ```
 
-*\# Or train CNN model*  
+_\# Or train CNN model_
+
 ```sh
 ./scripts/run\_training.sh cnn
 ```
 
-*\# Or train LSTM model*  
+_\# Or train LSTM model_
+
 ```sh
 ./scripts/run\_training.sh lstm
 ```
 
 This will:
 
-* Extract features from PCAPs
+- Extract features from PCAPs
 
-* Preprocess and scale data
+- Preprocess and scale data
 
-* Train PyTorch model with early stopping
+- Train PyTorch model with early stopping
 
-* Evaluate on test set
+- Evaluate on test set
 
-* Save model and metrics
+- Save model and metrics
 
 ### **3\. Inference API**
 
@@ -193,36 +211,36 @@ Start the REST API server:
 
 **API Endpoints:**
 
-* GET /health \- Check server status
+- GET /health \- Check server status
 
-* POST /predict \- Classify single packet
+- POST /predict \- Classify single packet
 
-* POST /batch\_predict \- Classify multiple packets
+- POST /batch_predict \- Classify multiple packets
 
 **Example Request:**
 
 ```sh
-curl \-X POST http://localhost:8000/predict \\  
-  \-H "Content-Type: application/json" \\  
-  \-d '{  
-    "frame\_len": 128,  
-    "fc\_type": 2,  
-    "src\_ip": "192.168.1.100",  
-    "dst\_ip": "192.168.1.1",  
-    "src\_port": 54321,  
-    "dst\_port": 443,  
-    "tcp\_flags": 18  
+curl \-X POST http://localhost:8000/predict \\
+  \-H "Content-Type: application/json" \\
+  \-d '{
+    "frame\_len": 128,
+    "fc\_type": 2,
+    "src\_ip": "192.168.1.100",
+    "dst\_ip": "192.168.1.1",
+    "src\_port": 54321,
+    "dst\_port": 443,
+    "tcp\_flags": 18
   }'
 ```
 
 **Response:**
 
 ```json
-{  
-  "prediction": 0,  
-  "label": "normal",  
-  "confidence\_normal": 0.9876,  
-  "confidence\_attack": 0.0124  
+{
+  "prediction": 0,
+  "label": "normal",
+  "confidence\_normal": 0.9876,
+  "confidence\_attack": 0.0124
 }
 ```
 
@@ -230,125 +248,138 @@ curl \-X POST http://localhost:8000/predict \\
 
 Run real-time intrusion detection:
 
-*\# Terminal 1: Start inference server*  
+_\# Terminal 1: Start inference server_
+
 ```sh
 ./scripts/run\_inference\_server.sh 8000
 ```
 
-*\# Terminal 2: Start live sniffer*  
+_\# Terminal 2: Start live sniffer_
+
 ```sh
 ./scripts/run\_live\_demo.sh 192.168.1.20
 ```
 
 **Output:**
+
 ```sh
-\[OK   \] \[14:23:45\] 192.168.1.100 → 192.168.1.1     (Normal: 0.98)  
-\[OK   \] \[14:23:45\] 192.168.1.100 → 8.8.8.8         (Normal: 0.96)  
-\[ALERT\!\] \[14:23:46\] 192.168.1.105 → 192.168.1.10   (ATTACK: 0.94)  
+\[OK   \] \[14:23:45\] 192.168.1.100 → 192.168.1.1     (Normal: 0.98)
+\[OK   \] \[14:23:45\] 192.168.1.100 → 8.8.8.8         (Normal: 0.96)
+\[ALERT\!\] \[14:23:46\] 192.168.1.105 → 192.168.1.10   (ATTACK: 0.94)
 \[ALERT\!\] \[14:23:46\] 192.168.1.105 → 192.168.1.10   (ATTACK: 0.96)
 ```
-
 
 ## **Model Performance**
 
 Typical performance metrics on test data:
 
-| Metric | Value |
-| :---- | :---- |
-| Accuracy | 98.2% |
-| Precision (Attack) | 98.7% |
-| Recall (Attack) | 97.3% |
-| F1-Score | 98.0% |
-| ROC AUC | 0.992 |
-| False Positive Rate | 1.8% |
+| Metric              | Value |
+| :------------------ | :---- |
+| Accuracy            | 98.2% |
+| Precision (Attack)  | 98.7% |
+| Recall (Attack)     | 97.3% |
+| F1-Score            | 98.0% |
+| ROC AUC             | 0.992 |
+| False Positive Rate | 1.8%  |
 
 ## **Configuration**
 
 All configuration files are in config/:
 
-* **training\_config.yaml** \- Model architecture, hyperparameters
+- **training_config.yaml** \- Model architecture, hyperparameters
 
-* **server\_config.yaml** \- API server settings
+- **server_config.yaml** \- API server settings
 
-* **sniffer\_config.yaml** \- Live capture settings
+- **sniffer_config.yaml** \- Live capture settings
 
-* **capture\_config.yaml** \- Packet capture defaults
+- **capture_config.yaml** \- Packet capture defaults
 
 Edit these files to customize behavior.
 
 ## **Documentation**
 
-* [**Live Demo Guide**](http://docs/Live-Demo-Guide.md) \- Complete step-by-step setup for presentations
+- [**Live Demo Guide**](http://docs/Live-Demo-Guide.md) \- Complete step-by-step setup for presentations
 
-* **Code Comments** \- Every script has detailed line-by-line comments
+- **Code Comments** \- Every script has detailed line-by-line comments
 
-* **Configuration Files** \- All YAML files are fully commented
+- **Configuration Files** \- All YAML files are fully commented
 
 ## **Troubleshooting**
 
 ### **Cannot SSH to U6+**
 
-*\# Enable SSH in UniFi Controller:*  
-*\# Devices → U6+ → Settings → Device Authentication → Enable SSH*
+_\# Enable SSH in UniFi Controller:_  
+_\# Devices → U6+ → Settings → Device Authentication → Enable SSH_
 
-*\# Test connection:*  
+_\# Test connection:_
+
 ```sh
 ssh ubnt@192.168.1.20
 ```
 
-*\# Set up SSH keys (recommended):*  
+_\# Set up SSH keys (recommended):_
+
 ```sh
 ssh-copy-id ubnt@192.168.1.20
 ```
 
 ### **Model Training Fails**
 
-*\# Check data:*  
+_\# Check data:_
+
 ```sh
 ls \-lh data/raw/\*.pcap
 ```
 
-*\# Verify PCAP files are not empty:*  
+_\# Verify PCAP files are not empty:_
+
 ```sh
 tcpdump \-r data/raw/normal\_1.pcap \-c 10
 ```
 
-*\# Check for NaN values in features:*  
+_\# Check for NaN values in features:_
+
 ```sh
-python \-c "  
-import pandas as pd  
-df \= pd.read\_csv('data/processed/wifi\_features.csv')  
-print(df.isnull().sum())  
+python \-c "
+import pandas as pd
+df \= pd.read\_csv('data/processed/wifi\_features.csv')
+print(df.isnull().sum())
 "
 ```
 
 ### **Inference Server Not Starting**
 
-*\# Check if model file exists:*  
+_\# Check if model file exists:_
+
 ```sh
 ls \-lh data/models/wifi\_ids\_mlp.pt
 ```
 
-*\# Check if preprocessed data exists:*  
+_\# Check if preprocessed data exists:_
+
 ```sh
 ls \-lh data/processed/\*.joblib
 ```
-*\# View detailed errors:*  
+
+_\# View detailed errors:_
+
 ```sh
-python src/inference\_server.py \\  
-  \--model data/models/wifi\_ids\_mlp.pt \\  
-  \--data-dir data/processed \\  
-  \--port 8000 \\  
+python src/inference\_server.py \\
+  \--model data/models/wifi\_ids\_mlp.pt \\
+  \--data-dir data/processed \\
+  \--port 8000 \\
   \--debug
 ```
+
 ///
+
 ## **Development**
 
 ### **Adding New Features**
 
-1. Modify src/pcap\_to\_features.py to extract new features
+1. Modify src/pcap_to_features.py to extract new features
 
-2. Update FEATURE\_NAMES list
+2. Update FEATURE_NAMES list
 
 3. Retrain model with new feature set
 
@@ -356,24 +387,30 @@ python src/inference\_server.py \\
 
 1. Add new model class in src/models.py
 
-2. Register in create\_model() function in train\_pytorch.py
+2. Register in create_model() function in train_pytorch.py
 
-3. Train with: ./scripts/run\_training.sh your\_model\_type
+3. Train with: ./scripts/run_training.sh your_model_type
 
 ### **Testing**
 
-*\# Test feature extraction*  
+_\# Test feature extraction_
+
 ```sh
 python src/pcap\_to\_features.py \--normal test.pcap \--output test.csv
 ```
-*\# Test preprocessing*  
+
+_\# Test preprocessing_
+
 ```sh
 python src/feature\_engineering.py \--csv test.csv \--output-dir test\_output
 ```
-*\# Test inference API*  
+
+_\# Test inference API_
+
 ```sh
 curl http://localhost:8000/health
 ```
+
 ## **Contributing**
 
 Contributions welcome\! Please:
@@ -387,4 +424,3 @@ Contributions welcome\! Please:
 4. Push to branch (git push origin feature/amazing-feature)
 
 5. Open Pull Request
-
