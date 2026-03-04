@@ -1,0 +1,25 @@
+# Packet capture configuration
+
+unifi_ap:
+  ip: 192.168.32.55  # AP IP address
+  user: root  # SSH username
+  password: null  # Password (use SSH keys instead)
+
+capture:
+  interface: br0  # Capture interface
+  duration: 60  # Default capture duration in seconds
+  packet_limit: 5000  # Max packets per capture (0 = unlimited)
+
+  # Filters
+  bpf_filter: ""  # Berkeley Packet Filter (empty = capture all)
+  display_filter: ""  # Wireshark display filter
+
+output:
+  directory: data/raw  # Output directory for PCAP files
+  prefix: capture  # Filename prefix
+  format: pcap  # Output format (pcap or pcapng)
+
+  # Labeling
+  auto_label: false  # Automatically add labels to filenames
+  label_normal: normal  # Label for normal traffic
+  label_attack: attack  # Label for attack traffic

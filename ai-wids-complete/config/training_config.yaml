@@ -1,0 +1,24 @@
+# Training configuration for AI-WIDS model
+
+model:
+  type: mlp  # Options: mlp, cnn, lstm
+  hidden_dims: [128, 64]  # Hidden layer sizes
+  dropout: 0.3  # Dropout rate for regularization
+  num_classes: 2  # Binary classification (normal vs attack)
+
+training:
+  batch_size: 256  # Training batch size
+  epochs: 30  # Maximum training epochs
+  learning_rate: 0.001  # Learning rate
+  patience: 5  # Early stopping patience
+  test_size: 0.2  # Fraction of data for testing
+  random_seed: 42  # Random seed for reproducibility
+
+paths:
+  data_dir: data/processed  # Preprocessed data directory
+  model_output: data/models/wifi_ids_model.pt  # Output model file
+  log_dir: logs  # Training logs directory
+
+device:
+  use_cuda: true  # Use GPU if available
+  auto_select: true  # Automatically select best device

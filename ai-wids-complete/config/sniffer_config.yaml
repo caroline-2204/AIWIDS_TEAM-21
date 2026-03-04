@@ -1,0 +1,26 @@
+# Live sniffer configuration
+
+unifi_ap:
+  ip: 192.168.32.55  # UniFi AP IP address
+  user: root  # SSH username
+  interface: br0  # Capture interface (br0, ath0, ath1, etc.)
+  ssh_timeout: 10  # SSH connection timeout
+
+inference:
+  server_url: http://localhost:8000  # Inference API URL
+  timeout: 2  # Request timeout in seconds
+  batch_size: 1  # Number of packets to batch (1 = real-time)
+
+detection:
+  alert_threshold: 0.7  # Confidence threshold for alerts
+  verbose: false  # Print detailed packet info
+  log_alerts: true  # Log all alerts to file
+
+display:
+  show_normal: true  # Show normal traffic classifications
+  show_timestamps: true  # Show timestamps
+  color_output: true  # Use colored terminal output
+
+capture:
+  packet_limit: 0  # Stop after N packets (0 = unlimited)
+  buffer_size: 65536  # Packet buffer size in bytes
