@@ -74,6 +74,8 @@ def parse_pcap(
             # If extraction fails, default to 0
             frame_len = 0
 
+        frame_num = int(getattr(pkt, "number", 0) or 0)
+
         # --- Initialize WiFi / 802.11 fields with default values ---
         # Frame control type (0=management, 1=control, 2=data)
         fc_type = 0
@@ -92,6 +94,11 @@ def parse_pcap(
         # Received Signal Strength Indicator (dBm)
         rssi = -100
 
+        fc_protected = 0
+        duration = 0
+        seq_num = 0
+
+
         # Try to extract WiFi-specific fields if WLAN layer exists
         try:
             # Check if packet has an 802.11 (WLAN) layer
@@ -100,19 +107,34 @@ def parse_pcap(
                 wlan = pkt.wlan
 
                 # Extract frame control type field
-                fc_type = int(getattr(wlan, "fc_type", "0") or 0)
+                fc_tree = getattr(wlan, "fc_tree", None)
+
+
+                fc_type = int(getattr(fc_tree, "type", "0") or 0)
 
                 # Extract frame control subtype field
-                fc_subtype = int(getattr(wlan, "fc_subtype", "0") or 0)
+                fc_subtype = int(getattr(fc_tree, "subtype", "0") or 0)
+
+                
+                # Extract frame protected flag
+                flags_tree = getattr(fc_tree, "flags_tree", None)
+
+                fc_protected = int(getattr(flags_tree, "protected", "0"))   # 1 if encrypted, 0 if not
+
+                # NAV Duration 
+                duration = int(getattr(wlan, "duration", "0"))
+
+                # Sequence Number
+                seq_num = int(getattr(wlan, "seq"))
 
                 # Get frame control flags as string
-                flags = getattr(wlan, "fc", "") or ""
+                # flags = getattr(wlan, "fc", "") or ""
 
                 # Parse retry flag from flags string
-                retry = 1 if "retry" in flags.lower() else 0
+                retry = int(getattr(flags_tree, "retry","0"))
 
                 # Parse more_data flag from flags string
-                more_data = 1 if "more_data" in flags.lower() else 0
+                more_data = int(getattr(flags_tree, "moredata","0"))
 
                 # Extract source address (transmitter MAC)
                 src = getattr(wlan, "sa", "unknown")
@@ -123,8 +145,22 @@ def parse_pcap(
                 # Extract BSSID (access point MAC address)
                 bssid = getattr(wlan, "bssid", "unknown")
 
+        except Exception:
+            # If any WiFi field extraction fails, use defaults
+            pass
+
+        channel = 0
+        data_rate = 0
+
+        try:
+            if hasattr(pkt, "wlan_radio"):
+                wlan_radio = pkt.wlan_radio
+
+                channel = getattr(wlan_radio, "channel")
+                data_rate = getattr(wlan_radio, "data_rate")
+
                 # Try to extract signal strength if available
-                if hasattr(wlan, "signal_dbm"):
+                if hasattr(wlan, "signal_dbm"): # Still unknown
                     try:
                         # Convert signal strength to integer dBm value
                         rssi = int(wlan.signal_dbm)
@@ -132,7 +168,6 @@ def parse_pcap(
                         # If conversion fails, use default weak signal
                         rssi = -100
         except Exception:
-            # If any WiFi field extraction fails, use defaults
             pass
 
         # --- Initialize IP/TCP/UDP fields with default values ---
@@ -204,9 +239,15 @@ def parse_pcap(
 
         # Create a dictionary containing all extracted features for this packet
         row = dict(
+            frame_number=frame_num,   # Frame number for filtering
             frame_len=frame_len,      # Total packet size in bytes
             fc_type=fc_type,          # WiFi frame type
             fc_subtype=fc_subtype,    # WiFi frame subtype
+            fc_protected=fc_protected,# Is protected
+            duration=duration,        # Packet Duration
+            seq_num=seq_num,          # Sequence Number
+            channel=channel,          # Radio Channel
+            data_rate=data_rate,      # Data Rate
             retry=retry,              # WiFi retry flag
             more_data=more_data,      # WiFi more data flag
             src=src,                  # Source MAC address
