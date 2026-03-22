@@ -148,7 +148,10 @@ if __name__ == "__main__":
         )
         
         attack_frames = [pkt.frame_info.number for pkt in attacks]
-
+        attack_frame_numbers = set(attack_frames)
+        print(f"Identified {len(attack_frame_numbers)} attack frames based on filter: {atttack_conditions}")
+    else:
+        print("No attack filter provided, all frames will be labeled as normal.")
     pkts = FileCapture(
         input_file=str(pcap_file),          # Convert Path object to string
         use_json=True,                       # Use JSON parsing for speed
