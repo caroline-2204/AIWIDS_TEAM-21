@@ -45,11 +45,11 @@ def extract_awid3_features(pkt: Packet):
     radiotap_channel_flags_ofdm = 0
     radiotap_channel_flags_cck = 0
 
+    frame_len = getattr(pkt.frame_info, "len", 0)
+    frame_time_relative = getattr(pkt.frame_info, "time_relative", 0)
+    frame_time_epoch = getattr(pkt.frame_info, "time_epoch", 0)
 
-
-    layers = pkt.layers
-
-    if "wlan" in layers:
+    if hasattr(pkt, "wlan"):
         wlan = pkt.wlan
 
         # Extract frame control type field
@@ -70,7 +70,7 @@ def extract_awid3_features(pkt: Packet):
         wlan_fc_ds = int(getattr(wlan, "ds", "0"))
         wlan_fc_pwrmgt = int(getattr(wlan, "pwrmgt", "0"))
     
-    if "wlan_radio" in layers:
+    if hasattr(pkt, "wlan_radio"):
         wlan_radio_phy = getattr(pkt.wlan_radio, "phy", 0)
         wlan_radio_datarate = getattr(pkt.wlan_radio, "data_rate", 0)
         wlan_radio_duration = getattr(pkt.wlan_radio, "duration", 0)
@@ -81,7 +81,7 @@ def extract_awid3_features(pkt: Packet):
         wlan_radio_channel = getattr(pkt.wlan_radio, "channel", 0)
         wlan_radio_frequency = getattr(pkt.wlan_radio, "frequency", 0)
     
-    if "radiotap" in layers:
+    if hasattr(pkt, "radiotap"):
         radiotap_length = getattr(pkt.radiotap, "length", 0)
         radiotap_datarate = getattr(pkt.radiotap, "datarate", 0)
         radiotap_timestamp_ts = getattr(pkt.radiotap, "timestamp_ts", 0)
@@ -112,7 +112,10 @@ def extract_awid3_features(pkt: Packet):
         "radiotap.timestamp.ts": radiotap_timestamp_ts,
         "radiotap.mactime": radiotap_mactime,
         "radiotap.channel.flags.ofdm": radiotap_channel_flags_ofdm,
-        "radiotap.channel.flags.cck": radiotap_channel_flags_cck
+        "radiotap.channel.flags.cck": radiotap_channel_flags_cck,
+        "frame.len": frame_len,
+        "frame.time_relative": frame_time_relative,
+        "frame.time_epoch": frame_time_epoch,
     }
 
 
