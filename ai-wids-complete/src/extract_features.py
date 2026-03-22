@@ -47,7 +47,6 @@ def extract_awid3_features(pkt: Packet):
 
     frame_len = getattr(pkt.frame_info, "len", 0)
     frame_time_relative = getattr(pkt.frame_info, "time_relative", 0)
-    frame_time_epoch = getattr(pkt.frame_info, "time_epoch", 0)
 
     if hasattr(pkt, "wlan"):
         wlan = pkt.wlan
@@ -115,7 +114,6 @@ def extract_awid3_features(pkt: Packet):
         "radiotap.channel.flags.cck": radiotap_channel_flags_cck,
         "frame.len": frame_len,
         "frame.time_relative": frame_time_relative,
-        "frame.time_epoch": frame_time_epoch,
     }
 
 
