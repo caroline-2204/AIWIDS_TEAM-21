@@ -45,8 +45,8 @@ def extract_awid3_features(pkt: Packet):
     radiotap_channel_flags_ofdm = 0
     radiotap_channel_flags_cck = 0
 
-    frame_len = getattr(pkt.frame_info, "len", 0)
-    frame_time_relative = getattr(pkt.frame_info, "time_relative", 0)
+    frame_len = int(getattr(pkt.frame_info, "len", "0"))
+    frame_time_relative = float(getattr(pkt.frame_info, "time_relative", "0"))
 
     if hasattr(pkt, "wlan"):
         wlan = pkt.wlan
@@ -70,21 +70,21 @@ def extract_awid3_features(pkt: Packet):
         wlan_fc_pwrmgt = int(getattr(wlan, "pwrmgt", "0"))
     
     if hasattr(pkt, "wlan_radio"):
-        wlan_radio_phy = getattr(pkt.wlan_radio, "phy", 0)
-        wlan_radio_datarate = getattr(pkt.wlan_radio, "data_rate", 0)
-        wlan_radio_duration = getattr(pkt.wlan_radio, "duration", 0)
-        wlan_radio_signal_dbm = getattr(pkt.wlan_radio, "signal_dbm", 0)
-        wlan_radio_start_tsf = getattr(pkt.wlan_radio, "start_tsf", 0)
-        wlan_radio_end_tsf = getattr(pkt.wlan_radio, "end_tsf", 0)
-        wlan_radio_timestamp = getattr(pkt.wlan_radio, "timestamp", 0)
-        wlan_radio_channel = getattr(pkt.wlan_radio, "channel", 0)
-        wlan_radio_frequency = getattr(pkt.wlan_radio, "frequency", 0)
+        wlan_radio_phy = int(getattr(pkt.wlan_radio, "phy", "0"))
+        wlan_radio_datarate = int(getattr(pkt.wlan_radio, "data_rate", "0"))
+        wlan_radio_duration = int(getattr(pkt.wlan_radio, "duration", "0"))
+        wlan_radio_signal_dbm = int(getattr(pkt.wlan_radio, "signal_dbm", "0"))
+        wlan_radio_start_tsf = int(getattr(pkt.wlan_radio, "start_tsf", "0"))
+        wlan_radio_end_tsf = int(getattr(pkt.wlan_radio, "end_tsf", "0"))
+        wlan_radio_timestamp = int(getattr(pkt.wlan_radio, "timestamp", "0"))
+        wlan_radio_channel = int(getattr(pkt.wlan_radio, "channel", "0"))
+        wlan_radio_frequency = int(getattr(pkt.wlan_radio, "frequency", "0"))
     
     if hasattr(pkt, "radiotap"):
-        radiotap_length = getattr(pkt.radiotap, "length", 0)
-        radiotap_datarate = getattr(pkt.radiotap, "datarate", 0)
-        radiotap_timestamp_ts = getattr(pkt.radiotap, "timestamp_ts", 0)
-        radiotap_mactime = getattr(pkt.radiotap, "mactime", 0)
+        radiotap_length = int(getattr(pkt.radiotap, "length", "0"))
+        radiotap_datarate = int(getattr(pkt.radiotap, "datarate", "0"))
+        radiotap_timestamp_ts = int(getattr(pkt.radiotap, "timestamp_ts", "0"))
+        radiotap_mactime = int(getattr(pkt.radiotap, "mactime", "0"))
         radiotap_channel_flags_ofdm = int(getattr(pkt.radiotap, "channel_flags_ofdm", "0"))
         radiotap_channel_flags_cck = int(getattr(pkt.radiotap, "channel_flags_cck", "0"))
 
