@@ -125,12 +125,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract AWID3-style features from PCAP files")
     parser.add_argument("pcap_file", help="Path to PCAP file")
     parser.add_argument("--filter", default="", help="Display filter for attack frames")
-    parser.add_argument("--label", default="evil_twin", help="Label for attack frames")
+    parser.add_argument("--label", default="attack", help="Label for attack frames")
+    parser.add_argument("--output", default="../data/processed/Features.csv", help="Output CSV file for features")
     args = parser.parse_args()
     
     pcap_file = args.pcap_file
     atttack_conditions = args.filter
     attack_label = args.label
+    output_csv = args.output
 
     all_features = []
     attack_frame_numbers = []
@@ -147,7 +149,7 @@ if __name__ == "__main__":
             display_filter=atttack_conditions    # Filter for attack frames
         )
         
-        attack_frames = [pkt.fr for pkt in attacks]
+        attack_frames = [pkt.frame_info.number for pkt in attacks]
 
     pkts = FileCapture(
         input_file=str(pcap_file),          # Convert Path object to string
@@ -167,5 +169,6 @@ if __name__ == "__main__":
         all_features.append(features)
 
     df = pd.DataFrame(all_features)
-    df.to_csv("../data/processed/Features.csv", index=False)
+    df.to_csv(output_csv, index=False)
+    print(f"Features extracted and saved to {output_csv}")
 
