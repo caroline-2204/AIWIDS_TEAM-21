@@ -1,124 +1,175 @@
 #!/usr/bin/env python3
 """
 extract_features.py
-Convert PCAP files to AWID3-style CSV features for Evil Twin detection
-Input: ../data/raw/normal/*.pcap, data/raw/attack/*.pcap
+Convert PCAP files to AWID3-style CSV features
+Input:  file: str: (e.g. ../data/raw/<file>.pcap)
+        filter_condition: string to filter attack frames (e.g. "wlan.fc.type_subtype == 0x08")
+        attack_label: string label for attack frames (e.g. "evil_twin")
 Output: ../data/processed/Features.csv
-Features: 35 AWID3-style + Evil Twin features
 """
 
 import os
 import sys
 from pathlib import Path
 import pandas as pd
-from collections import defaultdict
-from scapy.all import rdpcap, Dot11, Dot11Elt, IP, TCP, UDP, ARP, DNS, DHCP
+from pyshark import FileCapture
+from pyshark.packet.packet import Packet
+import argparse
 
-# Global counters for attack indicators
-DEAUTH_COUNTER = defaultdict(int)
-BEACON_COUNTER = defaultdict(int)
-SSID_BY_BSSID = defaultdict(list)
+def extract_awid3_features(pkt: Packet):
+    """
+    Extract features from a packet in AWID3 style. Missing features are filled with 0.
+    """
 
-def extract_awid3_features(pkt):
-    """Extract 35 AWID3-style features + Evil Twin features"""
-    features = {}
+    wlan_fc_type = 0
+    wlan_fc_subtype = 0
+    wlan_fc_ds = 0
+    wlan_fc_protected = 0
+    wlan_fc_moredata = 0
+    wlan_fc_frag = 0
+    wlan_fc_retry = 0
+    wlan_fc_pwrmgt = 0
+    wlan_radio_phy = 0
+    wlan_radio_datarate = 0
+    wlan_radio_duration = 0
+    wlan_radio_signal_dbm = 0
+    wlan_radio_start_tsf = 0
+    wlan_radio_end_tsf = 0
+    wlan_radio_timestamp = 0
+    wlan_radio_channel = 0
+    wlan_radio_frequency = 0
+    radiotap_length = 0
+    radiotap_datarate = 0
+    radiotap_timestamp_ts = 0
+    radiotap_mactime = 0
+    radiotap_channel_flags_ofdm = 0
+    radiotap_channel_flags_cck = 0
 
-    # Frame info
-    features['frame_length'] = len(pkt)
-    features['frame_type'] = pkt.type if pkt.haslayer(Dot11) else 0
-    features['frame_subtype'] = pkt.subtype if pkt.haslayer(Dot11) else 0
+    frame_len = int(getattr(pkt.frame_info, "len", "0"))
+    frame_time_relative = float(getattr(pkt.frame_info, "time_relative", "0"))
 
-    # 802.11 Management frames (Evil Twin detection)
-    if pkt.haslayer(Dot11):
-        features['is_mgmt'] = 1 if pkt.type == 0 else 0
-        features['is_beacon'] = 1 if pkt.type == 0 and pkt.subtype == 8 else 0
-        features['is_deauth'] = 1 if pkt.type == 0 and pkt.subtype == 12 else 0
+    if hasattr(pkt, "wlan"):
+        wlan = pkt.wlan
 
-        bssid = pkt.addr2 or '00:00:00:00:00:00'
-        if features['is_deauth']:
-            DEAUTH_COUNTER[bssid] += 1
-            features['deauth_rate'] = DEAUTH_COUNTER[bssid]
-            features['packet_rate'] = BEACON_COUNTER[bssid] + DEAUTH_COUNTER[bssid]
-        else:
-            features['deauth_rate'] = 0
+        # Extract frame control type field
+        fc_tree = getattr(wlan, "fc_tree", None)
+        wlan_fc_type = int(getattr(fc_tree, "type", "0") or 0)
 
-        #if features['is_beacon'] and pkt.haslayer(Dot11Elt):
-        #    ssid = pkt[Dot11Elt].info.decode(errors='ignore')
-        #    features['ssid'] = ssid
-        if features['is_beacon'] and pkt.haslayer(Dot11Elt):
-            ssid = pkt[Dot11Elt].info.decode(errors='ignore')
-            features['ssid'] = ssid          
-            # New features
-            features['ssid_length'] = len(ssid)
-            BEACON_COUNTER[bssid] += 1
-            features['beacon_rate'] = BEACON_COUNTER[bssid]
-            SSID_BY_BSSID[bssid].append(ssid)
-            features['ssid_conflict'] = len(set(SSID_BY_BSSID[bssid]))
-        else:
-            features['ssid'] = ''
-            features['ssid_length'] = 0
-            features['beacon_rate'] = 0
-        
-        if hasattr(pkt, 'dBm_AntSignal'):
-            features['signal_strength'] = pkt.dBm_AntSignal
-        else:
-            features['signal_strength'] = 0
+        # Extract frame control subtype field
+        wlan_fc_subtype = int(getattr(fc_tree, "subtype", "0") or 0)
 
+        # Extract frame flags
+        flags_tree = getattr(fc_tree, "flags_tree", None)
 
-    # L2/L3 features (AWID3 style)
-    features['protocol_type'] = pkt.type if pkt.haslayer(Dot11) else 0
-    features['service'] = 0  # Simplified
-    features['flag_number'] = 0
-    features['src_bytes'] = 0
-    features['dst_bytes'] = 0
+        wlan_fc_protected = int(getattr(flags_tree, "protected", "0"))
+        wlan_fc_moredata = int(getattr(flags_tree, "moredata", "0"))
+        wlan_fc_retry = int(getattr(flags_tree, "retry","0"))
+        wlan_fc_frag = int(getattr(flags_tree, "frag","0"))
 
-    if pkt.haslayer(IP):
-        features['src_bytes'] = len(pkt[IP].payload)
-        features['dst_bytes'] = len(pkt[IP].payload)
-        features['protocol'] = pkt[IP].proto
-        features['src_port'] = pkt[TCP].sport if pkt.haslayer(TCP) else 0
-        features['dst_port'] = pkt[TCP].dport if pkt.haslayer(TCP) else 0
+        wlan_fc_ds = int(getattr(wlan, "ds", "0"))
+        wlan_fc_pwrmgt = int(getattr(wlan, "pwrmgt", "0"))
+    
+    if hasattr(pkt, "wlan_radio"):
+        wlan_radio_phy = int(getattr(pkt.wlan_radio, "phy", "0"))
+        wlan_radio_datarate = int(getattr(pkt.wlan_radio, "data_rate", "0"))
+        wlan_radio_duration = int(getattr(pkt.wlan_radio, "duration", "0"))
+        wlan_radio_signal_dbm = int(getattr(pkt.wlan_radio, "signal_dbm", "0"))
+        wlan_radio_start_tsf = int(getattr(pkt.wlan_radio, "start_tsf", "0"))
+        wlan_radio_end_tsf = int(getattr(pkt.wlan_radio, "end_tsf", "0"))
+        wlan_radio_timestamp = int(getattr(pkt.wlan_radio, "timestamp", "0"))
+        wlan_radio_channel = int(getattr(pkt.wlan_radio, "channel", "0"))
+        wlan_radio_frequency = int(getattr(pkt.wlan_radio, "frequency", "0"))
+    
+    if hasattr(pkt, "radiotap"):
+        radiotap_length = int(getattr(pkt.radiotap, "length", "0"))
+        radiotap_datarate = int(getattr(pkt.radiotap, "datarate", "0"))
+        radiotap_timestamp_ts = int(getattr(pkt.radiotap, "timestamp_ts", "0"))
+        radiotap_mactime = int(getattr(pkt.radiotap, "mactime", "0"))
+        radiotap_channel_flags_ofdm = int(getattr(pkt.radiotap, "channel_flags_ofdm", "0"))
+        radiotap_channel_flags_cck = int(getattr(pkt.radiotap, "channel_flags_cck", "0"))
 
-    # Simplified AWID3 features (full list would be 155+)
-    features['count'] = 0
-    features['srv_count'] = 0
-    features['serror_rate'] = 0
-    features['srv_serror_rate'] = 0
-    features['rerror_rate'] = 0
-    features['srv_rerror_rate'] = 0
-    features['same_srv_rate'] = 0
-    features['diff_srv_rate'] = 0
-    features['srv_diff_host_rate'] = 0
-    features['dst_host_count'] = 0
-    features['dst_host_srv_count'] = 0
-    features['dst_host_same_srv_rate'] = 0
-    features['dst_host_diff_srv_rate'] = 0
-    features['dst_host_same_src_port_rate'] = 0
-    features['dst_host_srv_diff_host_rate'] = 0
-    features['dst_host_serror_rate'] = 0
-    features['dst_host_srv_serror_rate'] = 0
-    features['dst_host_rerror_rate'] = 0
-    features['dst_host_srv_rerror_rate'] = 0
+    features = {
+        "wlan_fc.type": wlan_fc_type,
+        "wlan_fc.subtype": wlan_fc_subtype,
+        "wlan_fc.ds": wlan_fc_ds,
+        "wlan_fc.protected": wlan_fc_protected,
+        "wlan_fc.moredata": wlan_fc_moredata,
+        "wlan_fc.frag": wlan_fc_frag,
+        "wlan_fc.retry": wlan_fc_retry,
+        "wlan_fc.pwrmgt": wlan_fc_pwrmgt,
+        "wlan_radio.phy": wlan_radio_phy,
+        "wlan_radio.data_rate": wlan_radio_datarate,
+        "wlan_radio.duration": wlan_radio_duration,
+        "wlan_radio.signal_dbm": wlan_radio_signal_dbm,
+        "wlan_radio.start_tsf": wlan_radio_start_tsf,
+        "wlan_radio.end_tsf": wlan_radio_end_tsf,
+        "wlan_radio.timestamp": wlan_radio_timestamp,
+        "wlan_radio.channel": wlan_radio_channel,
+        "wlan_radio.frequency": wlan_radio_frequency,
+        "radiotap.length": radiotap_length,
+        "radiotap.datarate": radiotap_datarate,
+        "radiotap.timestamp.ts": radiotap_timestamp_ts,
+        "radiotap.mactime": radiotap_mactime,
+        "radiotap.channel.flags.ofdm": radiotap_channel_flags_ofdm,
+        "radiotap.channel.flags.cck": radiotap_channel_flags_cck,
+        "frame.len": frame_len,
+        "frame.time_relative": frame_time_relative,
+    }
+
 
     return features
 
 if __name__ == "__main__":
-    normal_pcaps = Path("../data/raw/normal").glob("*.pcap")
-    attack_pcaps = Path("../data/raw/attack").glob("*.pcap")
+    parser = argparse.ArgumentParser(description="Extract AWID3-style features from PCAP files")
+    parser.add_argument("pcap_file", help="Path to PCAP file")
+    parser.add_argument("--filter", default="", help="Display filter for attack frames")
+    parser.add_argument("--label", default="attack", help="Label for attack frames")
+    parser.add_argument("--output", default="../data/processed/Features.csv", help="Output CSV file for features")
+    args = parser.parse_args()
+    
+    pcap_file = args.pcap_file
+    atttack_conditions = args.filter
+    attack_label = args.label
+    output_csv = args.output
 
     all_features = []
+    attack_frame_numbers = []
 
-    for pcap_file in list(normal_pcaps) + list(attack_pcaps):
-        print(f"Processing {pcap_file}...")
-        pkts = rdpcap(str(pcap_file))
-        label = "normal" if "normal" in str(pcap_file) else "evil_twin"
+    
+    print(f"Processing {pcap_file}...")
+    if atttack_conditions:
+        attacks = FileCapture(
+            input_file=str(pcap_file),          # Convert Path object to string
+            use_json=True,                       # Use JSON parsing for speed
+            include_raw=False,                   # Don't store raw packet data
+            keep_packets=False,                  # Don't keep packets in memory
+            only_summaries=False,                # Parse full packet details
+            display_filter=atttack_conditions    # Filter for attack frames
+        )
+        
+        attack_frames = [pkt.frame_info.number for pkt in attacks]
+        attack_frame_numbers = set(attack_frames)
+        print(f"Identified {len(attack_frame_numbers)} attack frames based on filter: {atttack_conditions}")
+    else:
+        print("No attack filter provided, all frames will be labeled as normal.")
+    pkts = FileCapture(
+        input_file=str(pcap_file),          # Convert Path object to string
+        use_json=True,                       # Use JSON parsing for speed
+        include_raw=False,                   # Don't store raw packet data
+        keep_packets=False,                  # Don't keep packets in memory
+        only_summaries=False,                # Parse full packet details
+        )
 
-        for pkt in pkts:
-            features = extract_awid3_features(pkt)
-            features['label'] = label
-            all_features.append(features)
+    for pkt in pkts:
+        features = extract_awid3_features(pkt)
+        if pkt.frame_info.number in attack_frame_numbers:
+            features["label"] = attack_label
+        else:
+            features["label"] = "normal"
+
+        all_features.append(features)
 
     df = pd.DataFrame(all_features)
-    df.to_csv("../data/processed/Features.csv", index=False)
-    print(f"✅ Features.csv created: {len(df)} rows, {len(df.columns)} columns")
+    df.to_csv(output_csv, index=False)
+    print(f"Features extracted and saved to {output_csv}")
 
