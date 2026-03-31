@@ -20,6 +20,7 @@ from flask import Flask, render_template_string, render_template
 from flask_socketio import SocketIO
 import colorama
 from colorama import Fore, Style, Back
+from train_model import EvilTwinDetector
 
 colorama.init(autoreset=True)
 
@@ -46,28 +47,6 @@ class GlobalState:
         self.lock = threading.Lock()
 
 state = GlobalState()
-
-# ===========================
-# NEURAL NETWORK
-# ===========================
-# TODO: Import from train_model.py
-class EvilTwinDetector(nn.Module):
-    def __init__(self, input_size):
-        super().__init__()
-        self.fc1 = nn.Linear(input_size, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 32)
-        self.fc4 = nn.Linear(32, 2)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.3)
-
-    def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc3(x))
-        return self.fc4(x)
 
 # ===========================
 # HELPERS
@@ -171,7 +150,7 @@ def main():
 
     # Start Threads
     threading.Thread(target=dashboard_worker, daemon=True).start()
-    threading.Thread(target=lambda: socketio.run(app, host='0.0.0.0', port=5001, log_output=False), daemon=True).start()
+    threading.Thread(target=lambda: socketio.run(app, host='0.0.0.0', port=5000, log_output=False), daemon=True).start()
 
     # Packet Capture
     cmd = ['ssh', f'root@{OPENWRT_IP}', 'tcpdump', '-i', INTERFACE, '-w', '-', '-s', '0', 'not', 'port', '22']
