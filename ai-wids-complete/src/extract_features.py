@@ -16,6 +16,8 @@ from pyshark import FileCapture
 from pyshark.packet.packet import Packet
 import argparse
 
+
+# TODO: Merge New Uploaded Extract Feature Function?
 def extract_awid3_features(pkt: Packet):
     """
     Extract features from a packet in AWID3 style. Missing features are filled with 0.
