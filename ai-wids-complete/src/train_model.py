@@ -5,7 +5,7 @@ AI-WIDS Model Training Module - IMPROVED VERSION WITH VISUALIZATION
 ===============================================================================
 Purpose: Train Deep Neural Network for Evil Twin detection with live metrics
 Input:   ../data/processed/Features.csv (AWID3-style features)
-Output:  ../data/model/wireless_ids.pt (trained PyTorch model)
+Output:  ../data/models/wireless_ids.pt (trained PyTorch model)
 Features: Real-time training dashboard, plots, metrics logging
 ===============================================================================
 """
@@ -80,7 +80,7 @@ class EvilTwinDetector(nn.Module):
 # ===========================
 # TRAINING VISUALIZATION FUNCTION
 # ===========================
-def plot_training_metrics(history, save_path="../dashboard"):
+def plot_training_metrics(history, save_path="../results"):
     """
     Create comprehensive training visualization dashboard
     Args:
@@ -420,9 +420,9 @@ def main():
         'model_state_dict': model.state_dict(),           # Model weights
         'scaler': scaler,                                 # Feature scaler
         'feature_order': list(df.drop('label', axis=1).columns)  # Feature names
-    }, "../data/model/wireless_ids.pt")                   # Save to file
+    }, "../data/models/wireless_ids.pt")                   # Save to file
 
-    print(f"  ✓ Model saved: {Fore.GREEN}../data/model/wireless_ids.pt{Style.RESET_ALL}\n")
+    print(f"  ✓ Model saved: {Fore.GREEN}../data/models/wireless_ids.pt{Style.RESET_ALL}\n")
 
     # ===========================
     # CREATE VISUALIZATION
