@@ -83,11 +83,6 @@ def extract_awid3_features(pkt: Packet):
         wlan_radio_datarate = float(getattr(pkt.wlan_radio, "data_rate", "0"))
         wlan_radio_duration = int(getattr(pkt.wlan_radio, "duration", "0"))
         wlan_radio_signal_dbm = int(getattr(pkt.wlan_radio, "signal_dbm", "0"))
-        wlan_radio_start_tsf = int(getattr(pkt.wlan_radio, "start_tsf", "0"))
-        wlan_radio_end_tsf = int(getattr(pkt.wlan_radio, "end_tsf", "0"))
-        wlan_radio_timestamp = int(getattr(pkt.wlan_radio, "timestamp", "0"))
-        wlan_radio_channel = int(getattr(pkt.wlan_radio, "channel", "0")) 
-        wlan_radio_frequency = int(getattr(pkt.wlan_radio, "frequency", "0"))
     
     if hasattr(pkt, "radiotap"):
         radiotap_length = int(getattr(pkt.radiotap, "length", "0"))
@@ -110,11 +105,6 @@ def extract_awid3_features(pkt: Packet):
         "wlan_radio.data_rate": wlan_radio_datarate,
         "wlan_radio.duration": wlan_radio_duration,
         "wlan_radio.signal_dbm": wlan_radio_signal_dbm,
-        "wlan_radio.start_tsf": wlan_radio_start_tsf,
-        "wlan_radio.end_tsf": wlan_radio_end_tsf,
-        "wlan_radio.timestamp": wlan_radio_timestamp,
-        "wlan_radio.channel": wlan_radio_channel,
-        "wlan_radio.frequency": wlan_radio_frequency,
         "radiotap.length": radiotap_length,
         "radiotap.datarate": radiotap_datarate,
         "radiotap.timestamp.ts": radiotap_timestamp_ts,
