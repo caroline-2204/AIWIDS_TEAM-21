@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 """
-extract_features.py
-Convert PCAP files to AWID3-style CSV features
-Input:  file: str: (e.g. ../data/raw/<file>.pcap)
-        filter_condition: string to filter attack frames (e.g. "wlan.fc.type_subtype == 0x08")
-        attack_label: string label for attack frames (e.g. "evil_twin")
-Output: ../data/processed/Features.csv
+===============================================================================
+AI-WIDS Feature Extraction Module - IMPROVED VERSION
+===============================================================================
+Purpose: Convert PCAP files to AWID3-style CSV features for Evil Twin detection
+Input:   ../data/raw/normal/*.pcap, ../data/raw/attack/*.pcap
+Output:  ../data/processed/Features.csv
 """
 
-import os
-import sys
-from pathlib import Path
-import pandas as pd
+
+# ===========================
+# IMPORTS
+# ===========================
+import os                                    # For file system operations
+import sys                                   # For system-level functions
+from pathlib import Path                     # For cross-platform path handling
 from pyshark import FileCapture
 from pyshark.packet.packet import Packet
-import argparse
+import pandas as pd                          # For DataFrame creation and CSV export
+from scapy.all import rdpcap, Dot11, Dot11Elt, IP, TCP, UDP, ARP, DNS, DHCP  # Packet parsing
+from tqdm import tqdm                        # For progress bars
+import time                                  # For timing operations
+import colorama                              # For colored console output
+from colorama import Fore, Style, Back       # Color constants
+colorama.init(autoreset=True)        
 
 def extract_awid3_features(pkt: Packet):
     """
@@ -71,18 +80,18 @@ def extract_awid3_features(pkt: Packet):
     
     if hasattr(pkt, "wlan_radio"):
         wlan_radio_phy = int(getattr(pkt.wlan_radio, "phy", "0"))
-        wlan_radio_datarate = int(getattr(pkt.wlan_radio, "data_rate", "0"))
+        wlan_radio_datarate = float(getattr(pkt.wlan_radio, "data_rate", "0"))
         wlan_radio_duration = int(getattr(pkt.wlan_radio, "duration", "0"))
         wlan_radio_signal_dbm = int(getattr(pkt.wlan_radio, "signal_dbm", "0"))
         wlan_radio_start_tsf = int(getattr(pkt.wlan_radio, "start_tsf", "0"))
         wlan_radio_end_tsf = int(getattr(pkt.wlan_radio, "end_tsf", "0"))
         wlan_radio_timestamp = int(getattr(pkt.wlan_radio, "timestamp", "0"))
-        wlan_radio_channel = int(getattr(pkt.wlan_radio, "channel", "0"))
+        wlan_radio_channel = int(getattr(pkt.wlan_radio, "channel", "0")) 
         wlan_radio_frequency = int(getattr(pkt.wlan_radio, "frequency", "0"))
     
     if hasattr(pkt, "radiotap"):
         radiotap_length = int(getattr(pkt.radiotap, "length", "0"))
-        radiotap_datarate = int(getattr(pkt.radiotap, "datarate", "0"))
+        radiotap_datarate = float(getattr(pkt.radiotap, "datarate", "0"))
         radiotap_timestamp_ts = int(getattr(pkt.radiotap, "timestamp_ts", "0"))
         radiotap_mactime = int(getattr(pkt.radiotap, "mactime", "0"))
         radiotap_channel_flags_ofdm = int(getattr(pkt.radiotap, "channel_flags_ofdm", "0"))
@@ -120,39 +129,40 @@ def extract_awid3_features(pkt: Packet):
     return features
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extract AWID3-style features from PCAP files")
-    parser.add_argument("pcap_file", help="Path to PCAP file")
-    parser.add_argument("--filter", default="", help="Display filter for attack frames")
-    parser.add_argument("--label", default="attack", help="Label for attack frames")
-    parser.add_argument("--output", default="../data/processed/Features.csv", help="Output CSV file for features")
-    args = parser.parse_args()
-    
-    pcap_file = args.pcap_file
-    atttack_conditions = args.filter
-    attack_label = args.label
-    output_csv = args.output
 
-    all_features = []
-    attack_frame_numbers = []
+    # Print header with styling
+    print(f"\n{Back.BLUE}{Fore.WHITE} AI-WIDS FEATURE EXTRACTION {Style.RESET_ALL}\n")
 
-    
-    print(f"Processing {pcap_file}...")
-    if atttack_conditions:
-        attacks = FileCapture(
-            input_file=str(pcap_file),          # Convert Path object to string
-            use_json=True,                       # Use JSON parsing for speed
-            include_raw=False,                   # Don't store raw packet data
-            keep_packets=False,                  # Don't keep packets in memory
-            only_summaries=False,                # Parse full packet details
-            display_filter=atttack_conditions    # Filter for attack frames
-        )
-        
-        attack_frames = [pkt.frame_info.number for pkt in attacks]
-        attack_frame_numbers = set(attack_frames)
-        print(f"Identified {len(attack_frame_numbers)} attack frames based on filter: {atttack_conditions}")
-    else:
-        print("No attack filter provided, all frames will be labeled as normal.")
-    pkts = FileCapture(
+    # ===========================
+    # STEP 1: LOCATE PCAP FILES
+    # ===========================
+    print(f"{Fore.CYAN}[1/4] Locating PCAP files...{Style.RESET_ALL}")
+    # Find all normal traffic PCAPs
+    normal_pcaps = list(Path("../data/raw/normal").glob("*.pcap"))  # Convert generator to list
+    print(f"  ✓ Normal PCAPs: {Fore.GREEN}{len(normal_pcaps)}{Style.RESET_ALL}")
+    # Find all attack traffic PCAPs
+    attack_pcaps = list(Path("../data/raw/attack").glob("*.pcap"))  # Convert generator to list
+    print(f"  ✓ Attack PCAPs: {Fore.GREEN}{len(attack_pcaps)}{Style.RESET_ALL}")
+    # Total files to process
+    total_files = len(normal_pcaps) + len(attack_pcaps)
+    print(f"  ✓ Total files: {Fore.YELLOW}{total_files}{Style.RESET_ALL}\n")
+
+    # ===========================
+    # STEP 2: PROCESS PCAP FILES
+    # ===========================
+    print(f"{Fore.CYAN}[2/4] Processing PCAP files...{Style.RESET_ALL}")
+    all_features = []                        # List to store all feature dictionaries
+    start_time = time.time()                 # Record start time for performance tracking
+    # Combine normal and attack PCAPs
+    all_pcaps = list(normal_pcaps) + list(attack_pcaps)
+    # Process each PCAP file with progress bar
+    for pcap_idx, pcap_file in enumerate(all_pcaps, 1):
+        # Determine label (normal or evil_twin)
+        label = "normal" if "normal" in str(pcap_file) else "evil_twin"
+        # Display current file being processed
+        print(f"  [{pcap_idx}/{total_files}] {Fore.YELLOW}{pcap_file.name}{Style.RESET_ALL} ({label})")
+        # Read all packets from PCAP file
+        pkts = FileCapture(
         input_file=str(pcap_file),          # Convert Path object to string
         use_json=True,                       # Use JSON parsing for speed
         include_raw=False,                   # Don't store raw packet data
@@ -160,16 +170,46 @@ if __name__ == "__main__":
         only_summaries=False,                # Parse full packet details
         )
 
-    for pkt in pkts:
-        features = extract_awid3_features(pkt)
-        if pkt.frame_info.number in attack_frame_numbers:
-            features["label"] = attack_label
-        else:
-            features["label"] = "normal"
+        # Process each packet with progress bar
+        for pkt_idx, pkt in enumerate(tqdm(pkts, desc="    Extracting", unit="pkt", leave=False)):
+            # Extract features from this packet
+            features = extract_awid3_features(pkt)
+            # Add label (normal or evil_twin)
+            features['label'] = label         # Ground truth for supervised learning
+            # Add to master list
+            all_features.append(features)     # Append feature dict to list
 
-        all_features.append(features)
+    # Calculate processing time
+    elapsed = time.time() - start_time        # Total seconds elapsed
+    print(f"  ✓ Processed {Fore.GREEN}{len(all_features)}{Style.RESET_ALL} packets in {Fore.YELLOW}{elapsed:.2f}s{Style.RESET_ALL}\n")
 
-    df = pd.DataFrame(all_features)
-    df.to_csv(output_csv, index=False)
-    print(f"Features extracted and saved to {output_csv}")
+    # ===========================
+    # STEP 3: CREATE DATAFRAME
+    # ===========================
+    print(f"{Fore.CYAN}[3/4] Creating DataFrame...{Style.RESET_ALL}")
 
+    # Convert list of dictionaries to pandas DataFrame
+    df = pd.DataFrame(all_features)           # Each row is a packet, each column is a feature
+
+    print(f"  ✓ Rows: {Fore.GREEN}{len(df)}{Style.RESET_ALL}")
+    print(f"  ✓ Features: {Fore.GREEN}{len(df.columns)}{Style.RESET_ALL}")
+    print(f"  ✓ Normal: {Fore.GREEN}{len(df[df['label']=='normal'])}{Style.RESET_ALL}")
+    print(f"  ✓ Evil Twin: {Fore.RED}{len(df[df['label']=='evil_twin'])}{Style.RESET_ALL}\n")
+
+    # ===========================
+    # STEP 4: SAVE TO CSV
+    # ===========================
+    print(f"{Fore.CYAN}[4/4] Saving to CSV...{Style.RESET_ALL}")
+
+    output_path = "../data/processed/Features.csv"  # Output file path
+    df.to_csv(output_path, index=False)       # Save DataFrame to CSV (no index column)
+
+    # Get file size
+    file_size = os.path.getsize(output_path) / (1024*1024)  # Convert bytes to MB
+
+    print(f"  ✓ Saved: {Fore.GREEN}{output_path}{Style.RESET_ALL}")
+    print(f"  ✓ Size: {Fore.YELLOW}{file_size:.2f} MB{Style.RESET_ALL}\n")
+
+    # Display summary statistics
+    print(f"{Back.GREEN}{Fore.BLACK} EXTRACTION COMPLETE {Style.RESET_ALL}")
+    print(f"\n{Fore.GREEN}Next: ./train_model.py{Style.RESET_ALL}\n")
