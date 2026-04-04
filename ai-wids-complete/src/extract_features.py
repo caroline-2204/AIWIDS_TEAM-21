@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 ===============================================================================
-AI-WIDS Feature Extraction Module - IMPROVED VERSION
+AI-WIDS Feature Extraction Module
 ===============================================================================
 Purpose: Convert PCAP files to AWID3-style CSV features for Evil Twin detection
 Input:   ../data/raw/normal/*.pcap, ../data/raw/attack/*.pcap
 Output:  ../data/processed/Features.csv
+===============================================================================
 """
 
 
