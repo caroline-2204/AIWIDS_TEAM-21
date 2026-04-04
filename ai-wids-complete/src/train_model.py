@@ -140,8 +140,8 @@ def main():
             
     history['confusion_matrix'] = confusion_matrix(all_labels, all_preds)
     
-    os.makedirs("../data/model", exist_ok=True)
-    torch.save({'model_state_dict': model.state_dict(), 'scaler': scaler, 'feature_order': list(df.drop('label', axis=1).columns)}, "../data/model/wireless_ids.pt")
+    os.makedirs("../data/models", exist_ok=True)
+    torch.save({'model_state_dict': model.state_dict(), 'scaler': scaler, 'feature_order': list(df.drop('label', axis=1).columns)}, "../data/models/wireless_ids.pt")
     plot_training_metrics(history)
     print(f"\n{Back.GREEN}{Fore.BLACK} TRAINING COMPLETE {Style.RESET_ALL}")
 
