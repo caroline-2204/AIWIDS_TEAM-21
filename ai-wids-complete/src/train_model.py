@@ -42,7 +42,7 @@ class EvilTwinDetector(nn.Module):
         x = self.relu(self.fc3(x))
         return self.fc4(x)
 
-def plot_training_metrics(history, save_path="../dashboard"):
+def plot_training_metrics(history, save_path="../results"):
     os.makedirs(save_path, exist_ok=True)
     plt.style.use('seaborn-v0_8-darkgrid')
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
