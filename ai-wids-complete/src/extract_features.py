@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-extract_features.py
-Convert PCAP files to AWID3-style CSV features
-Input:  file: str: (e.g. ../data/raw/<file>.pcap)
-        filter_condition: string to filter attack frames (e.g. "wlan.fc.type_subtype == 0x08")
-        attack_label: string label for attack frames (e.g. "evil_twin")
-Output: ../data/processed/Features.csv
+===============================================================================
+AI-WIDS Feature Extraction Module
+===============================================================================
+Purpose: Convert PCAP files to AWID3-style CSV features for Evil Twin detection
+Input:   ../data/raw/normal/*.pcap, ../data/raw/attack/*.pcap
+Output:  ../data/processed/Features.csv
+===============================================================================
 """
 
 import os
