@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import sys
 from pathlib import Path
 import pandas as pd
-from scapy.all import rdpcap, Dot11, RadioTap, Dot11Elt, IP, TCP, UDP, ARP, DNS, DHCP, Packet, Raw
+from scapy.all import rdpcap, Dot11, RadioTap, Dot11Elt, Packet, Raw
 from tqdm import tqdm                        
-import time
 
 
 def extract_features(pkt: Packet):
