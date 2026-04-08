@@ -8,6 +8,7 @@ AI-WIDS Model Training Module
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import pandas as pd
 import numpy as np
@@ -26,21 +27,28 @@ colorama.init(autoreset=True)
 
 class EvilTwinDetector(nn.Module):
     def __init__(self, input_size, num_class=2):
-        super().__init__()
-        self.fc1 = nn.Linear(input_size, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 32)
-        self.fc4 = nn.Linear(32, num_class)
-        self.relu = nn.ReLU()
+        super(EvilTwinDetector, self).__init__()
+
+        self.conv1 = nn.Conv1d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm1d(32)
+        
+        self.conv2 = nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm1d(64)
+        
+        self.pool = nn.MaxPool1d(kernel_size=2)
         self.dropout = nn.Dropout(0.3)
+        
+        self.fc1 = nn.Linear(64 * (input_size // 4), 128)
+        self.fc2 = nn.Linear(128, num_class)
 
     def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc3(x))
-        return self.fc4(x)
+        x = self.pool(F.relu(self.bn1(self.conv1(x))))
+        x = self.pool(F.relu(self.bn2(self.conv2(x))))
+        
+        x = torch.flatten(x, 1)
+        x = self.dropout(F.relu(self.fc1(x)))
+        x = self.fc2(x)
+        return x
 
 def plot_training_metrics(history, save_path="../results"):
     os.makedirs(save_path, exist_ok=True)
@@ -91,7 +99,7 @@ def main():
     X = df.drop('label', axis=1).values
     y = (df['label'] == 'evil_twin').astype(int).values
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=100, random_state=42, stratify=y)
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
