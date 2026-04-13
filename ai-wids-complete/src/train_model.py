@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-===============================================================================
 train_model.py — AI-WIDS Evil Twin Detection
-===============================================================================
 Purpose : Train a Deep Neural Network to detect Evil Twin Wi-Fi attacks
 Dataset : AWID3 (Aegean Wi-Fi Intrusion Dataset v3) — real 802.11 captures
           Download: https://icsdweb.aegean.gr/awid/awid3
@@ -896,8 +894,6 @@ def parse_args():
     return p.parse_args()
 
 
-# ===========================
 # ENTRY POINT
-# ===========================
 if __name__ == "__main__":
     main(parse_args())           # Parse CLI arguments and run the training pipeline
