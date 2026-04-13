@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 hello
 """
 train_model.py — AI-WIDS Evil Twin Detection
 
