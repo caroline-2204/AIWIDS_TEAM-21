@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 train_model.py — AI-WIDS Evil Twin Detection
+
 Purpose : Train a Deep Neural Network to detect Evil Twin Wi-Fi attacks
 Dataset : AWID3 (Aegean Wi-Fi Intrusion Dataset v3) — real 802.11 captures
           Download: https://icsdweb.aegean.gr/awid/awid3
@@ -28,12 +29,9 @@ AWID3 CSV setup — place files in data/processed/:
     wlan.duration, wlan.ra, frame.len, frame.time_delta,
     frame.time_delta_displayed, wlan.fc.order,
     radiotap.channel.freq, radiotap.dbm_antsignal
-===============================================================================
 """
 
-# ===========================
 # IMPORTS
-# ===========================
 import os                                    # File and folder operations
 import argparse                              # Command-line argument parsing
 import time                                  # Measuring training duration
@@ -87,9 +85,7 @@ except ImportError:
         def write(s): print(s)              # tqdm.write() falls back to print()
 
 
-# ===========================
 # FILE PATHS
-# ===========================
 # BASE_DIR is always the folder that contains this script, regardless of
 # where you run it from — prevents the "wrong directory" FileNotFoundError.
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -108,9 +104,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(PLOT_DIR,  exist_ok=True)
 
 
-# ===========================
 # AWID3 FEATURE CONFIGURATION
-# ===========================
 # These 16 column names are the exact Wireshark field names used in AWID3 CSVs.
 # Research (Chatzoglou et al. 2022) showed these 16 are sufficient for high
 # accuracy evil twin detection — using all 253 features adds noise and overhead.
@@ -141,9 +135,7 @@ LABEL_ATTACK = "Evil Twin"        # Label for evil twin attack traffic in AWID3
                                   # If your CSV uses "evil_twin" update this line
 
 
-# ===========================
 # NEURAL NETWORK ARCHITECTURE
-# ===========================
 class WirelessIDS(nn.Module):
     """
     4-layer Feedforward Deep Neural Network for binary classification.
@@ -202,9 +194,7 @@ class WirelessIDS(nn.Module):
         return x                     # Return raw logits [batch_size, 2]
 
 
-# ===========================
 # DATA LOADING
-# ===========================
 def find_csvs(data_dir: str) -> list:
     """
     Recursively find all CSV files inside data_dir.
@@ -334,9 +324,7 @@ def load_awid3(data_dir: str, sample_n: int = 0):
     return X, y, le
 
 
-# ===========================
 # DATALOADER CREATION
-# ===========================
 def make_loaders(X_tr, y_tr, X_va, y_va, batch_size: int, balance: bool):
     """
     Wrap numpy arrays in PyTorch DataLoaders ready for training.
@@ -392,9 +380,7 @@ def make_loaders(X_tr, y_tr, X_va, y_va, batch_size: int, balance: bool):
     return tr_loader, va_loader
 
 
-# ===========================
 # SINGLE EPOCH TRAINING
-# ===========================
 def train_epoch(model, loader, criterion, optimizer, device):
     """
     Run one full training epoch over all batches.
@@ -438,9 +424,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
     return loss_sum / total, correct / total    # Return averages
 
 
-# ===========================
 # SINGLE EPOCH EVALUATION
-# ===========================
 @torch.no_grad()                                # Disable gradient tracking (saves memory)
 def eval_epoch(model, loader, criterion, device):
     """
@@ -486,9 +470,7 @@ def eval_epoch(model, loader, criterion, device):
     )
 
 
-# ===========================
 # TRAINING DASHBOARD PLOT
-# ===========================
 def plot_training_dashboard(history, y_test, test_preds, class_names):
     """
     Generate a 2×2 visualisation dashboard and save it as a PNG.
@@ -608,9 +590,7 @@ def plot_training_dashboard(history, y_test, test_preds, class_names):
     print(f"{GRN}    [✓] Dashboard saved → {out_path}")
 
 
-# ===========================
 # SAVE MODEL CHECKPOINT
-# ===========================
 def save_checkpoint(model, scaler, le):
     """
     Save the trained model and preprocessing objects to disk.
@@ -643,9 +623,7 @@ def save_checkpoint(model, scaler, le):
     print(f"{GRN}    [✓] Encoder saved → {ENCODE_PATH}")
 
 
-# ===========================
 # MAIN TRAINING PIPELINE
-# ===========================
 def main(args):
     """
     Full training pipeline — called when the script is run directly.
@@ -841,9 +819,7 @@ def main(args):
     print(f"\n{GRN}Next step: python live_detection.py{RST}\n")
 
 
-# ===========================
 # COMMAND-LINE ARGUMENTS
-# ===========================
 def parse_args():
     """
     Define and parse command-line arguments.
