@@ -726,7 +726,7 @@ def parse_args():
                    help="Disable early stopping")
     p.add_argument("--no-balance",    dest="balance",    action="store_false",
                    help="Disable class balancing (not recommended)")
-    p.set_defaults(early_stop=True, balance=True)
+    p.set_defaults(early_stop=False, balance=True)
     return p.parse_args()
 
 
