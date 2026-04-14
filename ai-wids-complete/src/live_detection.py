@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI-WIDS Live Detection Dashboard - v2.2 (DUAL-BAND + AI MODEL)
+AI-WIDS Live Detection Dashboard (DUAL-BAND + AI MODEL)
 Loads wireless_ids.pt and runs real-time Evil Twin inference on every beacon.
 """
 import threading
