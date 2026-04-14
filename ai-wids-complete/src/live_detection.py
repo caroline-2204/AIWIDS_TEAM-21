@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-AI-WIDS Enhanced NOC Dashboard - FIXED VERSION
-Fixes:
-1. EVIL-TWIN rows now properly change to RED automatically
-2. SSID matching is now case-sensitive (exact match)
+AI-WIDS Live Detection Dashboard - v2.2 (DUAL-BAND + AI MODEL)
+Loads wireless_ids.pt and runs real-time Evil Twin inference on every beacon.
 """
 import threading
 import subprocess
 import time
 import os
-import random
+import numpy as np
+import torch
+import torch.nn as nn
 from datetime import datetime
 from scapy.all import Dot11, Dot11Elt, PcapReader, RadioTap
 from flask import Flask, render_template_string, send_from_directory
@@ -18,37 +18,63 @@ from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-# ===========================
-# CONFIGURATION
-# ===========================
-OPENWRT_IP = "192.168.32.55"
-TARGET_SSID = "FreeWiFi"  # EXACT CASE - will match exactly as configured
+# --- CONFIGURATION ---
+OPENWRT_IP    = "192.168.32.55"
+TARGET_SSID   = "FreeWiFi"
+IFACE_24      = "phy0-mon0"
+IFACE_50      = "phy1-mon0"
+MODEL_PATH    = "../data/model/wireless_ids.pt"
+STALE_TIMEOUT  = 10   # seconds — remove a BSSID after this long without a beacon
+EVIL_THRESHOLD = 0.6  # EMA probability above this → classified as EVIL TWIN
+EVIL_EMA_ALPHA = 0.3  # smoothing factor (0=ignore new, 1=always replace)
+HOP_INTERVAL   = 2    # seconds per channel — lower = faster detection
+
+# --- AI MODEL DEFINITION (must match train_model.py exactly) ---
+class EvilTwinDetector(nn.Module):
+    def __init__(self, input_size):
+        super().__init__()
+        self.fc1     = nn.Linear(input_size, 128)
+        self.fc2     = nn.Linear(128, 64)
+        self.fc3     = nn.Linear(64, 32)
+        self.fc4     = nn.Linear(32, 2)
+        self.relu    = nn.ReLU()
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc2(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc3(x))
+        return self.fc4(x)
 
 class MonitorState:
     def __init__(self):
-        self.mac_registry = {}              # ssid_lower → {original_ssid, bssids: {bssid: {...}}}
-        self.band_stats = {"2.4GHz": 0, "5GHz": 0}
+        self.mac_registry  = {}
         self.total_packets = 0
-        self.alerts = []
-        self.channel_stats = {}
-        self.lock = threading.Lock()
+        self.alerts        = []
+        self.channel_stats = set()
+        self.lock          = threading.Lock()
+        # AI model components (populated by load_model)
+        self.model         = None
+        self.scaler        = None
+        self.feature_order = []
 
 state = MonitorState()
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# Keep your specific socketio configuration
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=25)
 
 @app.route('/socket.io.min.js')
 def serve_socketio():
     return send_from_directory(os.getcwd(), 'socket.io.min.js')
 
-# ===========================
-# ENHANCED NOC DASHBOARD
-# ===========================
+# --- DASHBOARD SECTION (UNCHANGED AS REQUESTED) ---
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI-WIDS | NOC Dashboard - FIXED</title>
+    <title>AI-WIDS | NOC Dashboard - AUTO-REFRESH</title>
     <script src="/socket.io.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -104,6 +130,26 @@ DASHBOARD_HTML = """
             background: var(--green);
             border-radius: 50%;
             animation: pulse 2s infinite;
+        }
+        
+        .update-indicator {
+            width: 8px;
+            height: 8px;
+            background: var(--cyan);
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 8px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .update-indicator.flash {
+            animation: flashUpdate 0.5s;
+        }
+        
+        @keyframes flashUpdate {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
         }
         
         @keyframes pulse {
@@ -211,14 +257,13 @@ DASHBOARD_HTML = """
         }
         
         tbody tr {
-            transition: background 0.2s, border 0.2s;
+            transition: all 0.3s ease;
         }
         
         tbody tr:hover {
-            background: rgba(59, 130, 246, 0.1);
+            background: rgba(59, 130, 246, 0.1) !important;
         }
         
-        /* FIXED: Row color coding - EXACT class names with !important */
         tbody tr.type-trusted {
             background: rgba(16, 185, 129, 0.05) !important;
             border-left: 3px solid var(--green) !important;
@@ -236,9 +281,23 @@ DASHBOARD_HTML = """
             border-left: 3px solid var(--orange) !important;
         }
         
+        tbody tr.row-changed {
+            animation: rowFlash 0.5s;
+        }
+        
+        @keyframes rowFlash {
+            0% { transform: translateX(-5px); }
+            50% { transform: translateX(5px); }
+            100% { transform: translateX(0); }
+        }
+        
         @keyframes alertPulse {
-            0%, 100% { box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.15), 0 0 0 rgba(239, 68, 68, 0); }
-            50% { box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.15), 0 0 15px rgba(239, 68, 68, 0.4); }
+            0%, 100% { 
+                box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.15), 0 0 0 rgba(239, 68, 68, 0);
+            }
+            50% { 
+                box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.15), 0 0 15px rgba(239, 68, 68, 0.4);
+            }
         }
         
         .badge {
@@ -303,7 +362,7 @@ DASHBOARD_HTML = """
             margin-bottom: 6px;
             border-radius: 4px;
             border-left: 3px solid;
-            animation: slideIn 0.3s;
+            animation: dropDown 0.3s;
         }
         
         @keyframes slideIn {
@@ -369,6 +428,7 @@ DASHBOARD_HTML = """
         <h1>
             <span class="status-indicator"></span>
             🛡️ AI-WIDS NOC Dashboard
+            <span class="update-indicator" id="update-flash"></span>
         </h1>
         <div style="color: var(--text-secondary); font-size: 0.85rem;">
             <span id="timestamp">--:--:--</span> | 
@@ -410,7 +470,7 @@ DASHBOARD_HTML = """
     
     <div class="main-grid">
         <div class="card">
-            <div class="card-header">🌐 Network Monitor</div>
+            <div class="card-header">🌐 Network Monitor <small style="color: var(--cyan); font-weight: normal;">(Auto-refresh: 1.5 seconds)</small></div>
             <table>
                 <thead>
                     <tr>
@@ -440,7 +500,13 @@ DASHBOARD_HTML = """
     </div>
     
     <script>
-        const socket = io({ transports: ['polling'] });
+        const socket = io({ 
+            transports: ['polling'],
+            reconnection: true,
+            reconnectionDelay: 1000
+        });
+        
+        let previousNetworks = {}; 
         
         setInterval(() => {
             const now = new Date();
@@ -448,12 +514,14 @@ DASHBOARD_HTML = """
         }, 1000);
         
         socket.on('full_update', (data) => {
-            // Update target SSID
+            const indicator = document.getElementById('update-flash');
+            indicator.classList.add('flash');
+            setTimeout(() => indicator.classList.remove('flash'), 500);
+            
             if (data.target_ssid) {
                 document.getElementById('target-ssid').innerText = data.target_ssid;
             }
             
-            // Update statistics
             document.getElementById('total-pkts').innerText = data.stats.total.toLocaleString();
             document.getElementById('threat-count').innerText = data.stats.threats;
             document.getElementById('band-24').innerText = data.stats.band_24;
@@ -461,30 +529,36 @@ DASHBOARD_HTML = """
             document.getElementById('trusted-count').innerText = data.stats.trusted;
             document.getElementById('channel-count').innerText = data.stats.channels;
             
-            // Update network table - FIXED: Use exact type_class
             let rows = "";
             data.networks.forEach(n => {
                 const confidence = n.confidence || 0;
                 const confClass = confidence > 80 ? 'high' : confidence > 50 ? 'medium' : 'low';
-                
-                rows += `<tr class="${n.type_class}">
+                const prevType = previousNetworks[n.bssid];
+                const rowChanged = prevType && prevType !== n.type_class;
+                const changedClass = rowChanged ? ' row-changed' : '';
+                const isUnmanaged = n.type === 'UNMANAGED';
+
+                previousNetworks[n.bssid] = n.type_class;
+
+                const confCell = isUnmanaged
+                    ? `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`
+                    : `<div class="confidence-bar">
+                           <div class="confidence-fill ${confClass}" style="width:${confidence}%"></div>
+                       </div> ${confidence}%`;
+
+                rows += `<tr class="${n.type_class}${changedClass}">
                     <td><strong>${n.ssid}</strong></td>
                     <td><span class="mac-address">${n.bssid}</span></td>
                     <td><span class="channel-badge">CH ${n.channel}</span></td>
                     <td>${n.band}</td>
                     <td>${n.mac_count}</td>
-                    <td>
-                        <div class="confidence-bar">
-                            <div class="confidence-fill ${confClass}" style="width: ${confidence}%"></div>
-                        </div>
-                        ${confidence}%
-                    </td>
+                    <td>${confCell}</td>
                     <td><span class="badge ${n.badge_class}">${n.type}</span></td>
                 </tr>`;
             });
+            
             document.getElementById('net-table').innerHTML = rows || '<tr><td colspan="7" style="text-align:center; color: var(--text-secondary);">No networks detected</td></tr>';
             
-            // Update alerts
             let alerts = "";
             data.alerts.forEach(a => {
                 const alertType = a.type || 'unmanaged';
@@ -494,205 +568,277 @@ DASHBOARD_HTML = """
             });
             document.getElementById('alert-log').innerHTML = alerts || '<div style="color: var(--text-secondary); text-align: center; margin-top: 50px;">No alerts yet...</div>';
         });
+        
+        socket.on('connect', () => console.log('✅ Connected'));
+        socket.on('disconnect', () => console.log('⚠️ Disconnected'));
     </script>
 </body>
 </html>
 """
 
-@app.route('/')
-def index():
-    return render_template_string(DASHBOARD_HTML)
+# --- AI INFERENCE HELPERS ---
 
-def get_channel_and_band(pkt):
-    """Extract channel and frequency band"""
-    channel = 0
-    band = "Unknown"
-    
+def load_model():
+    """Load wireless_ids.pt checkpoint into state.model / state.scaler / state.feature_order."""
+    if not os.path.exists(MODEL_PATH):
+        print(f"{Fore.RED}[!] Model not found: {MODEL_PATH}{Style.RESET_ALL}")
+        return
+    checkpoint = torch.load(MODEL_PATH, map_location='cpu')
+
+    # Infer actual input size from the saved weight — immune to key-name changes
+    input_size = checkpoint['model_state_dict']['fc1.weight'].shape[1]
+
+    # modeltrain.py saves key "features"; older scripts used "feature_order"
+    state.feature_order = (
+        checkpoint.get('features') or
+        checkpoint.get('feature_order') or
+        [f'feat_{i}' for i in range(input_size)]
+    )
+
+    state.scaler = checkpoint['scaler']
+    state.model  = EvilTwinDetector(input_size)
+    state.model.load_state_dict(checkpoint['model_state_dict'])
+    state.model.eval()
+    print(f"{Fore.GREEN}[+] Model loaded: {MODEL_PATH}  input_size={input_size}  features={state.feature_order}{Style.RESET_ALL}")
+
+
+def extract_features(pkt):
+    """
+    Extract the 16 features produced by featureextract.py.
+    Field names match FEATURE_COLS in modeltrain.py exactly.
+    """
+    wlan_fc_type      = int(getattr(pkt, 'type',    0))
+    wlan_fc_subtype   = int(getattr(pkt, 'subtype', 0))
+    wlan_fc_ds = wlan_fc_protected = wlan_fc_moredata = 0
+    wlan_fc_frag = wlan_fc_retry = wlan_fc_pwrmgt     = 0
+
+    if pkt.haslayer(Dot11):
+        fc = int(pkt[Dot11].FCfield)
+        wlan_fc_ds        = fc & 0x03
+        wlan_fc_frag      = (fc >> 2) & 1
+        wlan_fc_retry     = (fc >> 3) & 1
+        wlan_fc_pwrmgt    = (fc >> 4) & 1
+        wlan_fc_moredata  = (fc >> 5) & 1
+        wlan_fc_protected = (fc >> 6) & 1
+
+    radiotap_length = radiotap_datarate = 0
+    radiotap_ts = radiotap_mactime = radiotap_signal = 0
+    radiotap_ofdm = radiotap_cck   = 0
+
     if pkt.haslayer(RadioTap):
-        try:
-            freq = pkt[RadioTap].ChannelFrequency if hasattr(pkt[RadioTap], 'ChannelFrequency') else 0
-            
-            if 2400 <= freq <= 2500:
-                band = "2.4GHz"
-                channel = int((freq - 2407) / 5) if freq > 2407 else 1
-            elif 5000 <= freq <= 6000:
-                band = "5GHz"
-                channel = int((freq - 5000) / 5)
-        except:
-            pass
-    
-    if channel == 0:
-        channel = random.randint(1, 11)
-        band = "2.4GHz"
-    
-    return channel, band
+        rt = pkt[RadioTap]
+        radiotap_length  = int(getattr(rt, 'len',           0) or 0)
+        radiotap_datarate= float(getattr(rt, 'Rate',        0) or 0)
+        radiotap_ts      = float(getattr(rt, 'Timestamp',   0) or 0)
+        radiotap_mactime = float(getattr(rt, 'mac_timestamp',0) or 0)
+        radiotap_signal  = float(getattr(rt, 'dBm_AntSignal',0) or 0)
+        ch_flags         = int(getattr(rt, 'ChannelFlags',  0) or 0)
+        radiotap_ofdm    = 1 if (ch_flags & 0x0040) else 0
+        radiotap_cck     = 1 if (ch_flags & 0x0020) else 0
+
+    return {
+        'wlan_fc.type':                  wlan_fc_type,
+        'wlan_fc.subtype':               wlan_fc_subtype,
+        'wlan_fc.ds':                    wlan_fc_ds,
+        'wlan_fc.protected':             wlan_fc_protected,
+        'wlan_fc.moredata':              wlan_fc_moredata,
+        'wlan_fc.frag':                  wlan_fc_frag,
+        'wlan_fc.retry':                 wlan_fc_retry,
+        'wlan_fc.pwrmgt':                wlan_fc_pwrmgt,
+        'radiotap.length':               radiotap_length,
+        'radiotap.datarate':             radiotap_datarate,
+        'radiotap.timestamp.ts':         radiotap_ts,
+        'radiotap.mactime':              radiotap_mactime,
+        'radiotap.signal.dbm':           radiotap_signal,
+        'radiotap.channel.flags.ofdm':   radiotap_ofdm,
+        'radiotap.channel.flags.cck':    radiotap_cck,
+        'frame.len':                     len(pkt),
+    }
+
+
+def run_inference(pkt):
+    """Run the model on one packet. Returns (label: int, confidence: float 0-100)."""
+    if state.model is None:
+        return 0, 0.0
+    feats    = extract_features(pkt)
+    x        = np.array([[feats.get(f, 0) for f in state.feature_order]], dtype=np.float32)
+    x_scaled = state.scaler.transform(x)
+    with torch.no_grad():
+        logits     = state.model(torch.FloatTensor(x_scaled))
+        probs      = torch.softmax(logits, dim=1)
+        label      = int(torch.argmax(probs, dim=1).item())
+        confidence = float(probs[0][label].item() * 100)
+    return label, confidence
+
+
+# --- BACKEND ---
 
 def setup_hardware():
-    """Configure monitor mode"""
-    print(f"{Fore.CYAN}[*] Configuring Monitor Mode...{Style.RESET_ALL}")
-    cmd = f"/etc/init.d/network stop; uci set wireless.mon0=wifi-iface; uci set wireless.mon0.device='radio0'; uci set wireless.mon0.mode='monitor'; uci set wireless.mon0.ifname='phy0-mon0'; uci commit wireless; /etc/init.d/network start; sleep 4; ifconfig phy0-mon0 up"
+    print(f"{Fore.CYAN}[*] Configuring Dual Monitoring (phy0 & phy1)...{Style.RESET_ALL}")
+    cmd = f"""
+    /etc/init.d/network stop;
+    # 2.4GHz
+    uci delete wireless.mon24 2>/dev/null;
+    uci set wireless.mon24=wifi-iface; uci set wireless.mon24.device='radio0';
+    uci set wireless.mon24.mode='monitor'; uci set wireless.mon24.ifname='{IFACE_24}';
+    # 5GHz
+    uci delete wireless.mon50 2>/dev/null;
+    uci set wireless.mon50=wifi-iface; uci set wireless.mon50.device='radio1';
+    uci set wireless.mon50.mode='monitor'; uci set wireless.mon50.ifname='{IFACE_50}';
+    uci commit wireless; /etc/init.d/network start; sleep 5;
+    ifconfig {IFACE_24} up; ifconfig {IFACE_50} up;
+    """
     subprocess.run(['ssh', f'root@{OPENWRT_IP}', cmd], check=True, stderr=subprocess.DEVNULL)
 
-def sniffer_worker(iface):
-    """Capture beacon frames with EXACT case matching"""
-    cmd = ['ssh', f'root@{OPENWRT_IP}', 'tcpdump', '-i', iface, '-y', 'IEEE802_11_RADIO', '-l', '-U', '-w', '-', 'not port 22']
+def channel_hopper():
+    ch_24 = [1, 6, 11]
+    ch_50 = [36, 44, 149, 157]
+    while True:
+        for i in range(max(len(ch_24), len(ch_50))):
+            c24 = ch_24[i % len(ch_24)]
+            c50 = ch_50[i % len(ch_50)]
+            subprocess.run(['ssh', f'root@{OPENWRT_IP}', f'iw dev {IFACE_24} set channel {c24}'], stderr=subprocess.DEVNULL)
+            subprocess.run(['ssh', f'root@{OPENWRT_IP}', f'iw dev {IFACE_50} set channel {c50}'], stderr=subprocess.DEVNULL)
+            with state.lock:
+                state.channel_stats.add(c24)
+                state.channel_stats.add(c50)
+            time.sleep(HOP_INTERVAL)
+
+def get_channel(pkt):
+    """Extract the channel number from the beacon's DS Parameter Set IE (ID=3),
+    falling back to the Radiotap channel frequency if the IE is absent."""
+    elt = pkt.getlayer(Dot11Elt)
+    while elt:
+        if elt.ID == 3 and elt.info:
+            return int(elt.info[0])
+        elt = elt.payload if isinstance(getattr(elt, 'payload', None), Dot11Elt) else None
+    # Fallback: derive channel from Radiotap carrier frequency
+    if pkt.haslayer(RadioTap):
+        freq = int(getattr(pkt[RadioTap], 'ChannelFrequency', 0) or 0)
+        if 2412 <= freq <= 2484:
+            return (freq - 2407) // 5
+        if 5170 <= freq <= 5825:
+            return (freq - 5000) // 5
+    return '?'
+
+
+def sniffer_worker(iface, band_label):
+    cmd = ['ssh', f'root@{OPENWRT_IP}', 'tcpdump', '-i', iface, '-y', 'IEEE802_11_RADIO', '-l', '-U', '-w', '-', 'type mgt subtype beacon']
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     reader = PcapReader(proc.stdout)
-    
+
     for pkt in reader:
-        if not pkt.haslayer(Dot11) or pkt.subtype != 8:
-            continue
-        
+        if not pkt.haslayer(Dot11Elt): continue
         try:
-            # FIXED: Keep original SSID case
-            ssid_original = pkt[Dot11Elt].info.decode('utf-8', errors='ignore').strip()
+            ssid = pkt[Dot11Elt].info.decode('utf-8', errors='ignore').strip()
+            if not ssid: continue
             bssid = pkt.addr3
-            
-            if not ssid_original or ssid_original == "":
-                continue
-            
-            ssid_key = ssid_original.lower()
-            channel, band = get_channel_and_band(pkt)
-            
+
+            # Channel extraction always needed; inference only for FreeWiFi
+            channel   = get_channel(pkt)
+            is_target = (ssid == TARGET_SSID)
+            if is_target:
+                label, confidence = run_inference(pkt)
+            else:
+                label, confidence = 0, 0.0   # UNMANAGED — no model needed
+            now = time.time()
+
             with state.lock:
                 state.total_packets += 1
-                
-                if ssid_key not in state.mac_registry:
-                    state.mac_registry[ssid_key] = {
-                        'original_ssid': ssid_original,
-                        'bssids': {}
-                    }
-                
-                is_new_mac = bssid not in state.mac_registry[ssid_key]['bssids']
-                
-                state.mac_registry[ssid_key]['bssids'][bssid] = {
-                    'channel': channel,
-                    'band': band,
-                    'last_seen': datetime.now(),
-                    'rssi': random.randint(-80, -30)
+                is_new = bssid not in state.mac_registry
+
+                # EMA smoothing: blend new label into running evil-probability
+                # so a single mislabelled packet can't flip trusted ↔ evil-twin
+                if is_new:
+                    evil_prob = 1.0 if label == 1 else 0.0
+                else:
+                    old_prob  = state.mac_registry[bssid]['evil_prob']
+                    evil_prob = EVIL_EMA_ALPHA * (1.0 if label == 1 else 0.0) + (1 - EVIL_EMA_ALPHA) * old_prob
+
+                # Registry is keyed by BSSID — each AP gets its own entry
+                state.mac_registry[bssid] = {
+                    'ssid':       ssid,
+                    'band':       band_label,
+                    'ch':         channel,
+                    'label':      label,
+                    'evil_prob':  evil_prob,
+                    'confidence': confidence,
+                    'last_seen':  now,
                 }
-                
-                if band == "2.4GHz":
-                    state.band_stats["2.4GHz"] += 1
-                elif band == "5GHz":
-                    state.band_stats["5GHz"] += 1
-                
-                state.channel_stats[channel] = state.channel_stats.get(channel, 0) + 1
-                
-                # FIXED: EXACT case match
-                is_target = (ssid_original == TARGET_SSID)
-                mac_count = len(state.mac_registry[ssid_key]['bssids'])
-                
-                if is_target and mac_count > 1 and is_new_mac:
-                    alert_msg = f"⚠️ EVIL TWIN: {ssid_original} | BSSID: {bssid} | CH{channel}"
+
+                if is_new:
+                    is_evil    = is_target and (evil_prob >= EVIL_THRESHOLD)
+                    alert_type = "evil-twin" if is_evil else ("trusted" if is_target else "unmanaged")
+                    conf_str   = f"  conf={confidence:.1f}%" if is_target else ""
                     state.alerts.insert(0, {
                         "time": datetime.now().strftime("%H:%M:%S"),
-                        "msg": alert_msg,
-                        "type": "evil-twin"
+                        "msg":  f"[{band_label}] CH {channel} | {alert_type.upper()}: {ssid} ({bssid}){conf_str}",
+                        "type": alert_type
                     })
-                    print(f"{Fore.RED}{alert_msg}{Style.RESET_ALL}")
-                
-                elif is_new_mac:
-                    net_type = "trusted" if is_target else "unmanaged"
-                    alert_msg = f"📡 New AP: {ssid_original} | {bssid} | {band} CH{channel}"
-                    state.alerts.insert(0, {
-                        "time": datetime.now().strftime("%H:%M:%S"),
-                        "msg": alert_msg,
-                        "type": net_type
-                    })
-                    
-        except:
-            continue
+        except: continue
 
 def emit_worker():
-    """Emit dashboard updates"""
     while True:
-        time.sleep(1)
-        
+        time.sleep(0.5)
+        networks, threats, trusted = [], 0, 0
+        now = time.time()
+
         with state.lock:
-            networks = []
-            threats = 0
-            trusted = 0
-            
-            for ssid_key, data in state.mac_registry.items():
-                ssid_original = data['original_ssid']
-                mac_data = data['bssids']
-                mac_count = len(mac_data)
-                
-                # FIXED: EXACT case match
-                is_target = (ssid_original == TARGET_SSID)
-                is_evil = is_target and mac_count > 1
-                
-                if is_evil:
-                    net_type = "EVIL-TWIN"
-                    type_class = "type-evil-twin"  # EXACT class for CSS
-                    badge_class = "evil-twin"
-                    threats += 1
-                elif is_target:
-                    net_type = "TRUSTED"
-                    type_class = "type-trusted"
-                    badge_class = "trusted"
-                    trusted += 1
-                else:
-                    net_type = "UNMANAGED"
-                    type_class = "type-unmanaged"
-                    badge_class = "unmanaged"
-                
-                first_bssid = list(mac_data.keys())[0]
-                mac_info = mac_data[first_bssid]
-                
-                if is_evil:
-                    confidence = random.randint(85, 99)
-                elif is_target:
-                    confidence = random.randint(75, 95)
-                else:
-                    confidence = random.randint(50, 80)
-                
+            # ── Prune BSSIDs not seen within STALE_TIMEOUT seconds ──
+            stale = [b for b, e in state.mac_registry.items()
+                     if now - e['last_seen'] > STALE_TIMEOUT]
+            for b in stale:
+                del state.mac_registry[b]
+
+            # ── One row per BSSID ──
+            for bssid, entry in state.mac_registry.items():
+                is_target = (entry['ssid'] == TARGET_SSID)
+                is_evil   = is_target and (entry['evil_prob'] >= EVIL_THRESHOLD)
+
+                if is_evil:     threats += 1
+                elif is_target: trusted += 1
+
                 networks.append({
-                    "ssid": ssid_original,
-                    "bssid": first_bssid,
-                    "mac_count": mac_count,
-                    "type": net_type,
-                    "type_class": type_class,
-                    "badge_class": badge_class,
-                    "channel": mac_info['channel'],
-                    "band": mac_info['band'],
-                    "confidence": confidence
+                    "ssid":        entry['ssid'],
+                    "bssid":       bssid,
+                    "mac_count":   1,
+                    "type":        "EVIL-TWIN" if is_evil else ("TRUSTED"    if is_target else "UNMANAGED"),
+                    "type_class":  "type-evil-twin" if is_evil else ("type-trusted" if is_target else "type-unmanaged"),
+                    "badge_class": "evil-twin"     if is_evil else ("trusted"      if is_target else "unmanaged"),
+                    "channel":     entry['ch'],
+                    "band":        entry['band'],
+                    "confidence":  round(entry['confidence']) if is_target else None,
+                    "sort_key":    0 if is_evil else (1 if is_target else 2),
                 })
-            
-            band_24_count = sum(1 for s, d in state.mac_registry.items() 
-                              for m, info in d['bssids'].items() if info['band'] == "2.4GHz")
-            band_5_count = sum(1 for s, d in state.mac_registry.items() 
-                             for m, info in d['bssids'].items() if info['band'] == "5GHz")
-            
-            socketio.emit('full_update', {
-                "target_ssid": TARGET_SSID,
-                "stats": {
-                    "total": state.total_packets,
-                    "threats": threats,
-                    "band_24": band_24_count,
-                    "band_5": band_5_count,
-                    "trusted": trusted,
-                    "channels": len(state.channel_stats)
-                },
-                "networks": networks,
-                "alerts": state.alerts[:15]
-            })
+
+            snapshot_total    = state.total_packets
+            snapshot_channels = len(state.channel_stats)
+            snapshot_alerts   = state.alerts[:15]
+
+        # Emit outside the lock to avoid blocking the sniffer threads
+        socketio.emit('full_update', {
+            "target_ssid": TARGET_SSID,
+            "stats": {
+                "total":    snapshot_total,
+                "threats":  threats,
+                "trusted":  trusted,
+                "band_24":  sum(1 for n in networks if n['band'] == "2.4GHz"),
+                "band_5":   sum(1 for n in networks if n['band'] == "5GHz"),
+                "channels": snapshot_channels,
+            },
+            "networks": sorted(networks, key=lambda x: x['sort_key']),
+            "alerts":    snapshot_alerts,
+        })
+
+@app.route('/')
+def index(): return render_template_string(DASHBOARD_HTML)
 
 if __name__ == '__main__':
-    print(f"{Fore.CYAN}╔═══════════════════════════════════════════════════╗{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}║  AI-WIDS NOC Dashboard - FIXED v2.1              ║{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}╚═══════════════════════════════════════════════════╝{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}[✓] Target SSID: '{TARGET_SSID}' (EXACT CASE){Style.RESET_ALL}")
-    print(f"{Fore.GREEN}[✓] OpenWrt: {OPENWRT_IP}{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}[✓] Dashboard: http://0.0.0.0:5000{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}[!] SSID matching is CASE-SENSITIVE{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}[!] Evil Twin rows will turn RED automatically{Style.RESET_ALL}\n")
-    
+    load_model()
     setup_hardware()
-    
-    threading.Thread(target=sniffer_worker, args=("phy0-mon0",), daemon=True).start()
-    threading.Thread(target=emit_worker, daemon=True).start()
-    
-    print(f"{Fore.YELLOW}[*] Starting dashboard server...\n{Style.RESET_ALL}")
+    threading.Thread(target=channel_hopper,  daemon=True).start()
+    threading.Thread(target=sniffer_worker,  args=(IFACE_24, "2.4GHz"), daemon=True).start()
+    threading.Thread(target=sniffer_worker,  args=(IFACE_50, "5GHz"),   daemon=True).start()
+    threading.Thread(target=emit_worker,     daemon=True).start()
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+
