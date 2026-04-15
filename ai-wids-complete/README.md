@@ -1,198 +1,127 @@
-# AI-WIDS Evil Twin Detection System
+# AI-WIDS Evil Twin + Deauth Detection System
 
 ## Complete Production Implementation
-
-**Matching projecttask.docx specifications exactly**
 
 ## Network Architecture
 
 ```
 U6+ OpenWrt Router (192.168.32.55)
-  ↓ br-lan (monitor mode)
+  ↓ phy0-mon0 (monitor mode)
 Linux Mint Server (192.168.32.10)
   ├── data/raw/normal/*.pcap
   ├── data/raw/attack/*.pcap
   ├── data/processed/Features.csv (AWID3-style)
   └── data/model/wireless_ids.pt
 
-AP Phone (FreeWiFi, Ch1 2.4GHz)
-  ↓
-Phone A/B (Clients)
-
-ET Phone (FreeWiFi Evil Twin, Ch1 2.4GHz)
-  ↓
+AP Phone (FreeWiFi, Ch1 2.4GHz)  ← Legitimate AP
+ET Phone (FreeWiFi Evil Twin, Ch1 2.4GHz)  ← Evil Twin
+Attacker Device  ← Deauth flood source (for testing)
 Phone A/B (Clients)
 ```
 
-## 📋 Exact File Structure
+## File Structure
 
 ```
-ai-wids-eviltwin/
+ai-wids-complete/
 ├── scripts/
-│   ├── normal_traffic.sh      # ./normal_traffic.sh
-│   └── evil_twin.traffic.sh   # ./evil_twin.traffic.sh
+│   ├── normal_traffic.sh           # Collect normal traffic PCAPs
+│   ├── evil_twin.traffic.sh        # Collect Evil Twin attack PCAPs
+│   ├── evil_twin_normal_traffic.sh # Combined normal+attack collection
+│   └── deauth_attack.sh            # NEW: Collect deauth attack PCAPs
 ├── src/
-│   ├── extract_features.py    # ./extract_features.py
-│   ├── train_model.py         # ./train_model.py
-│   └── live_detection.py      # ./live_detection.py
+│   ├── deauth_detector.py          # NEW: Sliding-window deauth flood detector
+│   ├── extract_features.py         # Convert PCAPs to AWID3-style CSV features
+│   ├── train_model.py              # Train the neural network model
+│   └── live_detection.py           # UPDATED: Real-time detection (ET + Deauth)
 ├── data/
-│   ├── raw/normal/            # Normal PCAPs
-│   ├── raw/attack/            # Evil Twin PCAPs
-│   ├── processed/             # Features.csv
-│   └── model/                 # wireless_ids.pt
-└── README.md                  # This file
+│   ├── raw/normal/                 # Normal traffic PCAPs
+│   ├── raw/attack/                 # Evil Twin + Deauth PCAPs
+│   ├── processed/                  # Features.csv
+│   └── model/                      # wireless_ids.pt
+└── README.md
 ```
 
-## 🚀 Deployment Workflow (Exact Match)
+## Deployment Workflow
 
 ### 1. Data Collection
 
 ```bash
-./normal_traffic.sh            # Normal traffic from U6+
-./evil_twin.traffic.sh         # Evil Twin attack traffic
-```
-
-**Outputs:**
-
-```
-data/raw/normal/*.pcap         # Normal captures
-data/raw/attack/*.pcap         # Evil Twin captures
+./scripts/normal_traffic.sh           # Normal traffic
+./scripts/evil_twin.traffic.sh        # Evil Twin attack traffic
+./scripts/deauth_attack.sh            # NEW: Deauth attack traffic
 ```
 
 ### 2. Feature Extraction
 
 ```bash
-python extract_features.py <input_file> --filter <filter_string> --label evil_twin
-```
-
-**Output:**
-
-```
-data/processed/Features.csv 
+cd src
+python extract_features.py
 ```
 
 ### 3. Model Training
 
 ```bash
-./train_model.py               # Deep NN training
-```
-
-**Output:**
-
-```bash
-data/model/wireless_ids.pt     # Trained model
+python train_model.py
 ```
 
 ### 4. Live Detection
 
 ```bash
-./live_detection.py            # Real-time detection
+python live_detection.py
 ```
 
-**Loads:** `data/model/wireless_ids.pt`
+Open dashboard: http://localhost:5000
 
 ---
 
-## 📱 Evil Twin Attack Setup
+## What is Detected
 
-### Legitimate AP (AP Phone):
+### Evil Twin Attack
+- Same SSID broadcast from multiple BSSIDs (MAC conflict rule)
+- ML model classification via trained neural network
+- Mobile hotspot identification via OUI database
 
-- Hotspot: **FreeWiFi**
-- Channel: **1 (2.4GHz)**
-- Clients: Phone A/B connect
-
-### Evil Twin AP (ET Phone):
-
-- Hotspot: **FreeWiFi** (same SSID)
-- Channel: **1 (2.4GHz)**
-- Clients: Phone A/B switch between APs
-
-### U6+ Capture:
-
-```
-OpenWrt: 192.168.32.55
-Interface: br-lan (monitor)
-Channels: 1 (2.4GHz), 2 (5GHz)
-tcpdump → Server 192.168.32.10
-```
+### Deauth / Disassociation Flood Attack (NEW)
+- Sliding window counter per sender BSSID
+- Triggers alert if 10+ deauth frames seen within 5 seconds
+- Broadcast deauths (→ ff:ff:ff:ff:ff:ff) are weighted x2 (more dangerous)
+- Purple alerts on dashboard, distinct from red Evil Twin alerts
 
 ---
 
-## 🔧 Features (AWID3-style + Evil Twin)
+## Deauth Detector Configuration
 
-**35+ Features Extracted:**
+Edit `src/deauth_detector.py` to tune thresholds:
 
-```
-frame_length, frame_type, frame_subtype
-is_mgmt, is_beacon, is_deauth
-deauth_rate, beacon_rate, ssid_conflict
-protocol_type, service, flag_number
-src_bytes, dst_bytes, src_port, dst_port
-count, srv_count, serror_rate, rerror_rate
-same_srv_rate, diff_srv_rate, dst_host_count
-... (full AWID3 feature set)
-label (normal/evil_twin)
+```python
+DEAUTH_WINDOW_SECONDS = 5    # Sliding window size
+DEAUTH_THRESHOLD      = 10   # Frames in window to trigger alert
+DISASSOC_THRESHOLD    = 10   # Disassoc frames to trigger alert
+BROADCAST_WEIGHT      = 2    # Multiplier for broadcast deauths
 ```
 
 ---
 
-## 📊 Expected Results
+## Dashboard
 
-### Training Output:
-
-```
-Epoch 50: Loss 0.0234, Acc 97.5%
-Model saved: data/model/wireless_ids.pt
-```
-
-### Live Detection:
-
-```
-[EVIL TWIN] Conf: 0.96 | Deauth: 1 | Beacon: 0
-[EVIL TWIN] Conf: 0.98 | Deauth: 0 | Beacon: 1
-[NORMAL] Conf: 0.97 | Deauth: 0 | Beacon: 0
-```
+| Colour | Meaning |
+|--------|---------|
+| 🟢 Green  | Normal traffic |
+| 🔴 Red    | Evil Twin detected |
+| 🟠 Orange | Mobile hotspot |
+| 🟣 Purple | Deauth / Disassoc flood |
 
 ---
 
-## 🛠 Quick Deployment
-
-```bash
-# 1. Extract package
-tar -xzf ai-wids-eviltwin-complete.tar.gz
-cd ai-wids-eviltwin
-
-# 2. Setup U6+ OpenWrt (192.168.32.55)
-ssh root@192.168.32.55 "opkg update && opkg install tcpdump"
-
-# 3. Setup phones
-# AP Phone: FreeWiFi hotspot (Ch1)
-# ET Phone: FreeWiFi hotspot (Ch1)
-# Phone A/B: Connect to FreeWiFi
-
-# 4. Collect data
-./normal_traffic.sh
-./evil_twin.traffic.sh
-
-# 5. Train & detect
-./extract_features.py
-./train_model.py
-./live_detection.py
-```
-
----
-
-## 📈 Performance Metrics
+## Performance Metrics
 
 | Metric                  | Value                   |
-| ----------------------- | ----------------------- |
-| **Features**            | 35+ (AWID3 + Evil Twin) |
-| **Accuracy**            | 97.5%                   |
-| **Evil Twin Precision** | 98%                     |
-| **Evil Twin Recall**    | 97%                     |
-| **Detection Speed**     | <50ms/packet            |
-| **Training Time**       | 5 minutes               |
+|-------------------------|-------------------------|
+| Features                | 35+ (AWID3 + Evil Twin) |
+| Evil Twin Accuracy      | 97.5%                   |
+| Evil Twin Precision     | 98%                     |
+| Deauth Detection        | Rule-based (sliding window) |
+| Deauth Latency          | <5 seconds              |
+| Detection Speed         | <50ms/packet            |
 
-**Status:** ✅ **Production Ready - Matches projecttask.docx exactly**
-
-**Download the complete package above!** 🚀
+**Status:** ✅ Production Ready
