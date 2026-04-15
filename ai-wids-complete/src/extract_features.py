@@ -17,18 +17,14 @@ def extract_features(pkt: Packet):
     radiotap_length = 0
     radiotap_datarate = 0
     radiotap_timestamp_ts = 0
-    radiotap_mactime = 0
-    radiotap_signal_dbm = 0
+    wlan_radio_signal_dbm = 0
     radiotap_channel_flags_ofdm = 0
     radiotap_channel_flags_cck = 0
 
     frame_len = len(pkt)
 
-    wlan_fc_type = int(getattr(pkt, "type", 0))
-    wlan_fc_subtype = int(getattr(pkt, "subtype", 0))
-
     # Wlan Layer
-    if pkt.haslayer(Dot11): # Wlan Layer
+    if pkt.haslayer(Dot11): # Wlan/Beacon Frame Layer
         fc = int(pkt[Dot11].FCfield)
         wlan_fc_frag = (fc >> 2) # wlan.fc.frag is 3th bit
         wlan_fc_retry = (fc >> 3) & 1 # wlan.fc.retry is 4th bit
@@ -37,32 +33,42 @@ def extract_features(pkt: Packet):
         wlan_fc_protected = (fc >> 6) & 1 # wlan.fc.protected is 7th bit
         wlan_fc_ds = (fc & 0x03) # wlan.fc.ds is 1st & 2nd bit
 
+        # Extract Mac Address
+        wlan_sa = getattr(pkt[Dot11], 'addr3', None)  # Source Address
+        wlan_sa = int(wlan_sa.replace(':', ''), 16) if wlan_sa else 0
+        wlan_ta = getattr(pkt[Dot11], 'addr2', None)  # Transmitter Address
+        wlan_ta = int(wlan_ta.replace(':', ''), 16) if wlan_ta else 0
+        wlan_ra = getattr(pkt[Dot11], 'addr1', None)  # Receiver Address
+        wlan_ra = int(wlan_ra.replace(':', ''), 16) if wlan_ra else 0
+
+        wlan_seq = getattr(pkt[Dot11], 'SC', 0) >> 4
+
     if pkt.haslayer(RadioTap):
         radiotap = pkt[RadioTap]
         radiotap_length = getattr(radiotap, 'len', 0)
         radiotap_datarate = getattr(radiotap, 'Rate', 0)
         radiotap_timestamp_ts = getattr(radiotap, 'Timestamp', 0)
-        radiotap_mactime = getattr(radiotap, 'mac_timestamp', 0)
-        radiotap_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
+        wlan_radio_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
         radiotap_channel_flags = int(getattr(radiotap, 'ChannelFlags', 0))
         radiotap_channel_flags_ofdm = 1 if (radiotap_channel_flags & 0x0040) else 0 # OFDM flag is 7th bit
         radiotap_channel_flags_cck = 1 if (radiotap_channel_flags & 0x0020) else 0 # CCK flag is 6th bit
 
 
     features = {
-        "wlan_fc.type": wlan_fc_type,
-        "wlan_fc.subtype": wlan_fc_subtype,
-        "wlan_fc.ds": wlan_fc_ds,
-        "wlan_fc.protected": wlan_fc_protected,
-        "wlan_fc.moredata": wlan_fc_moredata,
-        "wlan_fc.frag": wlan_fc_frag,
-        "wlan_fc.retry": wlan_fc_retry,
-        "wlan_fc.pwrmgt": wlan_fc_pwrmgt,
+        "wlan.sa": wlan_sa,
+        "wlan.ta": wlan_ta,
+        "wlan.ra": wlan_ra,
+        "wlan.seq": wlan_seq,
+        "wlan.fc.ds": wlan_fc_ds,
+        "wlan.fc.protected": wlan_fc_protected,
+        "wlan.fc.moredata": wlan_fc_moredata,
+        "wlan.fc.frag": wlan_fc_frag,
+        "wlan.fc.retry": wlan_fc_retry,
+        "wlan.fc.pwrmgt": wlan_fc_pwrmgt,
         "radiotap.length": radiotap_length,
         "radiotap.datarate": radiotap_datarate,
         "radiotap.timestamp.ts": radiotap_timestamp_ts,
-        "radiotap.mactime": radiotap_mactime,
-        "radiotap.signal.dbm": radiotap_signal_dbm,
+        "wlan_radio.signal_dbm": wlan_radio_signal_dbm,
         "radiotap.channel.flags.ofdm": radiotap_channel_flags_ofdm,
         "radiotap.channel.flags.cck": radiotap_channel_flags_cck,
         "frame.len": frame_len,
