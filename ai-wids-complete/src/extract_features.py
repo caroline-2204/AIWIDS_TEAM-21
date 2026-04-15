@@ -17,7 +17,7 @@ def extract_features(pkt: Packet):
     radiotap_length = 0
     radiotap_datarate = 0
     radiotap_timestamp_ts = 0
-    radiotap_signal_dbm = 0
+    wlan_radio_signal_dbm = 0
     radiotap_channel_flags_ofdm = 0
     radiotap_channel_flags_cck = 0
 
@@ -41,12 +41,14 @@ def extract_features(pkt: Packet):
         wlan_ra = getattr(pkt[Dot11], 'addr1', None)  # Receiver Address
         wlan_ra = int(wlan_ra.replace(':', ''), 16) if wlan_ra else 0
 
+        wlan_seq = getattr(pkt[Dot11], 'SC', 0) >> 4
+
     if pkt.haslayer(RadioTap):
         radiotap = pkt[RadioTap]
         radiotap_length = getattr(radiotap, 'len', 0)
         radiotap_datarate = getattr(radiotap, 'Rate', 0)
         radiotap_timestamp_ts = getattr(radiotap, 'Timestamp', 0)
-        radiotap_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
+        wlan_radio_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
         radiotap_channel_flags = int(getattr(radiotap, 'ChannelFlags', 0))
         radiotap_channel_flags_ofdm = 1 if (radiotap_channel_flags & 0x0040) else 0 # OFDM flag is 7th bit
         radiotap_channel_flags_cck = 1 if (radiotap_channel_flags & 0x0020) else 0 # CCK flag is 6th bit
@@ -56,6 +58,7 @@ def extract_features(pkt: Packet):
         "wlan.sa": wlan_sa,
         "wlan.ta": wlan_ta,
         "wlan.ra": wlan_ra,
+        "wlan.seq": wlan_seq,
         "wlan.fc.ds": wlan_fc_ds,
         "wlan.fc.protected": wlan_fc_protected,
         "wlan.fc.moredata": wlan_fc_moredata,
@@ -65,7 +68,7 @@ def extract_features(pkt: Packet):
         "radiotap.length": radiotap_length,
         "radiotap.datarate": radiotap_datarate,
         "radiotap.timestamp.ts": radiotap_timestamp_ts,
-        "radiotap.signal.dbm": radiotap_signal_dbm,
+        "wlan_radio.signal_dbm": wlan_radio_signal_dbm,
         "radiotap.channel.flags.ofdm": radiotap_channel_flags_ofdm,
         "radiotap.channel.flags.cck": radiotap_channel_flags_cck,
         "frame.len": frame_len,
