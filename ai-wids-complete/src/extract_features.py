@@ -34,10 +34,8 @@ def extract_features(pkt: Packet):
         wlan_fc_ds = (fc & 0x03) # wlan.fc.ds is 1st & 2nd bit
 
         # Extract Mac Address
-        wlan_sa = getattr(pkt[Dot11], 'addr4', None)  # Source Address
+        wlan_sa = getattr(pkt[Dot11], 'addr3', None)  # Source Address
         wlan_sa = int(wlan_sa.replace(':', ''), 16) if wlan_sa else 0
-        wlan_da = getattr(pkt[Dot11], 'addr3', None)  # Destination Address
-        wlan_da = int(wlan_da.replace(':', ''), 16) if wlan_da else 0
         wlan_ta = getattr(pkt[Dot11], 'addr2', None)  # Transmitter Address
         wlan_ta = int(wlan_ta.replace(':', ''), 16) if wlan_ta else 0
         wlan_ra = getattr(pkt[Dot11], 'addr1', None)  # Receiver Address
@@ -56,7 +54,6 @@ def extract_features(pkt: Packet):
 
     features = {
         "wlan.sa": wlan_sa,
-        "wlan.da": wlan_da,
         "wlan.ta": wlan_ta,
         "wlan.ra": wlan_ra,
         "wlan.fc.ds": wlan_fc_ds,
