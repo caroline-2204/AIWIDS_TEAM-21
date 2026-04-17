@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI-WIDS Live Detection Dashboard (DUAL-BAND + AI MODEL)
+AI-WIDS Live Detection Dashboard - v2.2 (DUAL-BAND + AI MODEL)
 Loads wireless_ids.pt and runs real-time Evil Twin inference on every beacon.
 """
 import threading
@@ -24,10 +24,20 @@ TARGET_SSID   = "FreeWiFi"
 IFACE_24      = "phy0-mon0"
 IFACE_50      = "phy1-mon0"
 MODEL_PATH    = "../data/model/wireless_ids.pt"
-STALE_TIMEOUT  = 10   # seconds — remove a BSSID after this long without a beacon
-EVIL_THRESHOLD = 0.6  # EMA probability above this → classified as EVIL TWIN
-EVIL_EMA_ALPHA = 0.3  # smoothing factor (0=ignore new, 1=always replace)
-HOP_INTERVAL   = 2    # seconds per channel — lower = faster detection
+STALE_TIMEOUT       = 15    # seconds — remove a beacon BSSID after this long
+EVIL_THRESHOLD      = 0.45  # evil_prob must RISE above this to flip to EVIL TWIN
+SAFE_THRESHOLD      = 0.30  # evil_prob must FALL below this to flip back to TRUSTED
+EVIL_EMA_ALPHA      = 0.55  # smoothing factor — higher = faster detection
+HOP_INTERVAL        = 1     # seconds per channel — lower = faster detection
+DEAUTH_RATE_ALERT   = 3     # deauth frames/second sustained to trigger alert
+DEAUTH_WINDOW       = 5     # sliding window in seconds for rate calculation
+DEAUTH_HOLD_SECS    = 20    # keep deauth row visible for this long after last frame
+DEAUTH_MIN_RATE     = 1.0   # ignore stray deauth frames below this rate (frames/sec)
+
+# Set this to your TRUSTED AP's BSSID — any other device broadcasting TARGET_SSID
+# is immediately flagged as Evil Twin (regardless of AI score).
+# Leave empty to rely on AI-only + duplicate-SSID heuristic.
+TRUSTED_BSSIDS: set = {"fa:c6:f7:9e:cf:0c"}   # ← your phone hotspot MAC (always lowercase)
 
 # --- AI MODEL DEFINITION (must match train_model.py exactly) ---
 class EvilTwinDetector(nn.Module):
@@ -59,6 +69,11 @@ class MonitorState:
         self.model         = None
         self.scaler        = None
         self.feature_order = []
+        # Deauth tracking: src_mac → list of timestamps of received deauths
+        self.deauth_registry  = {}
+        self.deauth_total     = 0
+        # Active deauth attackers for the table: src_mac → {rate, dst, band, ch, last_seen}
+        self.deauth_attackers = {}
 
 state = MonitorState()
 app = Flask(__name__)
@@ -280,6 +295,30 @@ DASHBOARD_HTML = """
             background: rgba(251, 191, 36, 0.05) !important;
             border-left: 3px solid var(--orange) !important;
         }
+
+        tbody tr.type-deauth {
+            background: rgba(239, 68, 68, 0.20) !important;
+            border-left: 4px solid #ff0000 !important;
+            animation: alertPulse 1s infinite !important;
+        }
+
+        tbody tr.type-deauth-ended {
+            background: rgba(239, 68, 68, 0.06) !important;
+            border-left: 4px solid #aa2222 !important;
+        }
+
+        .badge.deauth {
+            background: rgba(239, 68, 68, 0.3);
+            color: #ff4444;
+            border: 1px solid #ff0000;
+            animation: alertPulse 1s infinite;
+        }
+
+        .badge.deauth-ended {
+            background: rgba(239, 68, 68, 0.1);
+            color: #aa4444;
+            border: 1px solid #aa2222;
+        }
         
         tbody tr.row-changed {
             animation: rowFlash 0.5s;
@@ -466,6 +505,14 @@ DASHBOARD_HTML = """
             <div class="stat-label">Active Channels</div>
             <div class="stat-value" id="channel-count">0</div>
         </div>
+        <div class="stat-card red">
+            <div class="stat-label">Deauth Frames</div>
+            <div class="stat-value" id="deauth-total">0</div>
+        </div>
+        <div class="stat-card red">
+            <div class="stat-label">Deauth Attackers</div>
+            <div class="stat-value" id="deauth-active">0</div>
+        </div>
     </div>
     
     <div class="main-grid">
@@ -479,7 +526,7 @@ DASHBOARD_HTML = """
                         <th>Channel</th>
                         <th>Band</th>
                         <th>MACs</th>
-                        <th>AI Confidence</th>
+                        <th>Confidence / Rate</th>
                         <th>Status</th>
                     </tr>
                 </thead>
@@ -528,6 +575,8 @@ DASHBOARD_HTML = """
             document.getElementById('band-5').innerText = data.stats.band_5;
             document.getElementById('trusted-count').innerText = data.stats.trusted;
             document.getElementById('channel-count').innerText = data.stats.channels;
+            document.getElementById('deauth-total').innerText  = (data.stats.deauth_total || 0).toLocaleString();
+            document.getElementById('deauth-active').innerText = data.stats.deauth_active || 0;
             
             let rows = "";
             data.networks.forEach(n => {
@@ -540,11 +589,22 @@ DASHBOARD_HTML = """
 
                 previousNetworks[n.bssid] = n.type_class;
 
-                const confCell = isUnmanaged
-                    ? `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`
-                    : `<div class="confidence-bar">
+                const isDeauth = n.type === 'DEAUTH ATTACK' || n.type === 'DEAUTH ENDED';
+                const noConf = isUnmanaged;
+                let confCell;
+                if (isDeauth) {
+                    if (n.type === 'DEAUTH ATTACK' && n.confidence > 0) {
+                        confCell = `<span style="color:#ff4444;font-weight:700;font-size:0.85rem;">${n.confidence}/s</span>`;
+                    } else {
+                        confCell = `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`;
+                    }
+                } else if (noConf) {
+                    confCell = `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`;
+                } else {
+                    confCell = `<div class="confidence-bar">
                            <div class="confidence-fill ${confClass}" style="width:${confidence}%"></div>
                        </div> ${confidence}%`;
+                }
 
                 rows += `<tr class="${n.type_class}${changedClass}">
                     <td><strong>${n.ssid}</strong></td>
@@ -697,8 +757,12 @@ def channel_hopper():
         for i in range(max(len(ch_24), len(ch_50))):
             c24 = ch_24[i % len(ch_24)]
             c50 = ch_50[i % len(ch_50)]
-            subprocess.run(['ssh', f'root@{OPENWRT_IP}', f'iw dev {IFACE_24} set channel {c24}'], stderr=subprocess.DEVNULL)
-            subprocess.run(['ssh', f'root@{OPENWRT_IP}', f'iw dev {IFACE_50} set channel {c50}'], stderr=subprocess.DEVNULL)
+            # Single SSH round-trip sets both interfaces — halves channel-change latency
+            subprocess.run(
+                ['ssh', f'root@{OPENWRT_IP}',
+                 f'iw dev {IFACE_24} set channel {c24}; iw dev {IFACE_50} set channel {c50}'],
+                stderr=subprocess.DEVNULL
+            )
             with state.lock:
                 state.channel_stats.add(c24)
                 state.channel_stats.add(c50)
@@ -732,7 +796,8 @@ def sniffer_worker(iface, band_label):
         try:
             ssid = pkt[Dot11Elt].info.decode('utf-8', errors='ignore').strip()
             if not ssid: continue
-            bssid = pkt.addr3
+            bssid = (pkt.addr3 or '').lower()
+            if not bssid: continue
 
             # Channel extraction always needed; inference only for FreeWiFi
             channel   = get_channel(pkt)
@@ -747,35 +812,134 @@ def sniffer_worker(iface, band_label):
                 state.total_packets += 1
                 is_new = bssid not in state.mac_registry
 
-                # EMA smoothing: blend new label into running evil-probability
-                # so a single mislabelled packet can't flip trusted ↔ evil-twin
+                # EMA smoothing: blend new prediction into running evil-probability.
+                # New BSSIDs start at 0.5 (neutral) — avoids one wrong first packet
+                # locking the AP as trusted before enough evidence accumulates.
                 if is_new:
-                    evil_prob = 1.0 if label == 1 else 0.0
+                    evil_prob     = 0.5 + (0.5 if label == 1 else -0.5) * EVIL_EMA_ALPHA
+                    was_evil_last = False
                 else:
-                    old_prob  = state.mac_registry[bssid]['evil_prob']
-                    evil_prob = EVIL_EMA_ALPHA * (1.0 if label == 1 else 0.0) + (1 - EVIL_EMA_ALPHA) * old_prob
+                    old_prob      = state.mac_registry[bssid]['evil_prob']
+                    was_evil_last = state.mac_registry[bssid].get('is_evil', False)
+                    evil_prob     = EVIL_EMA_ALPHA * (1.0 if label == 1 else 0.0) + (1 - EVIL_EMA_ALPHA) * old_prob
 
-                # Registry is keyed by BSSID — each AP gets its own entry
+                # ── RULE 0: Explicitly trusted BSSID — always safe ────────────
+                # Force evil_prob near zero so no other rule can flip it.
+                if is_target and TRUSTED_BSSIDS and bssid in TRUSTED_BSSIDS:
+                    evil_prob = min(evil_prob, 0.05)
+
+                # ── RULE 1: Unknown BSSID broadcasting TARGET_SSID ────────────
+                # If TRUSTED_BSSIDS is configured and this BSSID is NOT in it,
+                # any FreeWiFi beacon from it is almost certainly an Evil Twin.
+                elif is_target and TRUSTED_BSSIDS and bssid not in TRUSTED_BSSIDS:
+                    evil_prob = max(evil_prob, 0.90)
+
+                # ── RULE 2: Duplicate SSID heuristic (no TRUSTED_BSSIDS set) ──
+                # If another BSSID is already broadcasting TARGET_SSID and we
+                # have no explicit trust list, the new one is suspected evil.
+                # Guard: skip if this BSSID is already known-trusted.
+                elif is_new and is_target and not TRUSTED_BSSIDS:
+                    other_targets = [
+                        b for b, e in state.mac_registry.items()
+                        if e['ssid'] == TARGET_SSID and b != bssid
+                    ]
+                    if other_targets:
+                        evil_prob = max(evil_prob, 0.85)
+
+                # Hysteresis: flip TO evil only above EVIL_THRESHOLD,
+                # flip BACK to trusted only below SAFE_THRESHOLD.
+                if was_evil_last:
+                    is_evil = is_target and (evil_prob >= SAFE_THRESHOLD)
+                else:
+                    is_evil = is_target and (evil_prob >= EVIL_THRESHOLD)
+
+                # Alert on NEW BSSID appearance or status change
+                prev_is_evil = state.mac_registry[bssid].get('is_evil', None) if not is_new else None
+                status_changed = (not is_new) and (prev_is_evil != is_evil)
+
+                # Show raw model confidence (softmax probability of the predicted class).
+                # This varies naturally (50-95%) and reflects actual AI certainty,
+                # not the derived evil_prob which drifts to 0 or 1 over time.
+                display_conf = round(confidence)
+
                 state.mac_registry[bssid] = {
                     'ssid':       ssid,
                     'band':       band_label,
                     'ch':         channel,
                     'label':      label,
                     'evil_prob':  evil_prob,
-                    'confidence': confidence,
+                    'is_evil':    is_evil,
+                    'confidence': display_conf,
                     'last_seen':  now,
                 }
 
-                if is_new:
-                    is_evil    = is_target and (evil_prob >= EVIL_THRESHOLD)
+                if is_new or status_changed:
                     alert_type = "evil-twin" if is_evil else ("trusted" if is_target else "unmanaged")
                     conf_str   = f"  conf={confidence:.1f}%" if is_target else ""
+                    prefix     = "[NEW]" if is_new else "[STATUS CHANGE]"
                     state.alerts.insert(0, {
                         "time": datetime.now().strftime("%H:%M:%S"),
-                        "msg":  f"[{band_label}] CH {channel} | {alert_type.upper()}: {ssid} ({bssid}){conf_str}",
+                        "msg":  f"{prefix} [{band_label}] CH {channel} | {alert_type.upper()}: {ssid} ({bssid}){conf_str}",
                         "type": alert_type
                     })
         except: continue
+
+def deauth_sniffer_worker(iface, band_label):
+    """Capture deauth frames and track rate per source MAC (attacker)."""
+    cmd = ['ssh', f'root@{OPENWRT_IP}', 'tcpdump', '-i', iface, '-y', 'IEEE802_11_RADIO',
+           '-l', '-U', '-w', '-', 'type mgt subtype deauth']
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    reader = PcapReader(proc.stdout)
+
+    for pkt in reader:
+        if not pkt.haslayer(Dot11):
+            continue
+        try:
+            src  = pkt[Dot11].addr2 or 'unknown'   # injector / spoofed AP MAC
+            dst  = pkt[Dot11].addr1 or 'broadcast'  # victim client
+            ch   = get_channel(pkt)
+            now  = time.time()
+
+            with state.lock:
+                state.deauth_total += 1
+                if src not in state.deauth_registry:
+                    state.deauth_registry[src] = []
+                state.deauth_registry[src].append(now)
+                state.deauth_registry[src] = [
+                    t for t in state.deauth_registry[src] if now - t <= DEAUTH_WINDOW
+                ]
+                rate = len(state.deauth_registry[src]) / DEAUTH_WINDOW
+
+                # Only track attacker entries above the minimum rate threshold.
+                # Stray deauth frames (rate < DEAUTH_MIN_RATE) are normal Wi-Fi
+                # management traffic (device roaming, AP-initiated disconnects)
+                # and should not appear in the table.
+                if rate >= DEAUTH_MIN_RATE:
+                    prev = state.deauth_attackers.get(src, {})
+                    state.deauth_attackers[src] = {
+                        'src':       src,
+                        'dst':       dst,
+                        'rate':      rate,
+                        'peak_rate': max(rate, prev.get('peak_rate', 0)),
+                        'band':      band_label,
+                        'ch':        ch if ch != '?' else prev.get('ch', '?'),
+                        'last_seen': now,
+                        'active':    True,
+                    }
+
+                if rate >= DEAUTH_RATE_ALERT:
+                    last_alert_key = f'deauth_alerted_{src}'
+                    last_t = state.deauth_registry.get(last_alert_key, 0)
+                    if now - last_t > 5:
+                        state.deauth_registry[last_alert_key] = now
+                        state.alerts.insert(0, {
+                            "time": datetime.now().strftime("%H:%M:%S"),
+                            "msg":  f"[DEAUTH ATTACK] [{band_label}] src={src} dst={dst} rate={rate:.1f}/s",
+                            "type": "evil-twin",
+                        })
+        except Exception:
+            continue
+
 
 def emit_worker():
     while True:
@@ -793,7 +957,7 @@ def emit_worker():
             # ── One row per BSSID ──
             for bssid, entry in state.mac_registry.items():
                 is_target = (entry['ssid'] == TARGET_SSID)
-                is_evil   = is_target and (entry['evil_prob'] >= EVIL_THRESHOLD)
+                is_evil   = entry.get('is_evil', False)
 
                 if is_evil:     threats += 1
                 elif is_target: trusted += 1
@@ -807,24 +971,73 @@ def emit_worker():
                     "badge_class": "evil-twin"     if is_evil else ("trusted"      if is_target else "unmanaged"),
                     "channel":     entry['ch'],
                     "band":        entry['band'],
-                    "confidence":  round(entry['confidence']) if is_target else None,
+                    "confidence":  entry['confidence'] if is_target else None,
                     "sort_key":    0 if is_evil else (1 if is_target else 2),
                 })
 
+            # Add deauth attacker rows — keep visible for DEAUTH_HOLD_SECS after last frame
+            stale_deauth = [s for s, e in state.deauth_attackers.items()
+                            if now - e['last_seen'] > DEAUTH_HOLD_SECS]
+            for s in stale_deauth:
+                del state.deauth_attackers[s]
+
+            for src, entry in state.deauth_attackers.items():
+                elapsed   = now - entry['last_seen']
+                still_active = elapsed < DEAUTH_WINDOW * 2
+                cur_rate  = entry['rate'] if still_active else 0.0
+                peak_rate = entry['peak_rate']
+
+                if still_active:
+                    label_text = f"DEAUTH {cur_rate:.1f}/s"
+                    row_class  = "type-deauth"
+                    badge      = "deauth"
+                else:
+                    ago = int(elapsed)
+                    label_text = f"DEAUTH ENDED ({ago}s ago, peak {peak_rate:.1f}/s)"
+                    row_class  = "type-deauth-ended"
+                    badge      = "deauth-ended"
+
+                networks.append({
+                    "ssid":       label_text,
+                    "bssid":      src,
+                    "mac_count":  "→ " + (entry['dst'][:17] if entry['dst'] != 'broadcast' else 'BROADCAST'),
+                    "type":       "DEAUTH ATTACK" if still_active else "DEAUTH ENDED",
+                    "type_class": row_class,
+                    "badge_class": badge,
+                    "channel":    entry.get('ch', '?'),
+                    "band":       entry['band'],
+                    "confidence": round(cur_rate, 1) if still_active else 0,
+                    "deauth_rate": True,
+                    "sort_key":   -1 if still_active else -0.5,
+                })
+                if still_active and cur_rate >= DEAUTH_RATE_ALERT:
+                    threats += 1
+
             snapshot_total    = state.total_packets
             snapshot_channels = len(state.channel_stats)
-            snapshot_alerts   = state.alerts[:15]
+            snapshot_alerts   = state.alerts[:20]
+            snapshot_deauth   = state.deauth_total
+            # Active deauth sources: those with frames in the last DEAUTH_WINDOW seconds
+            now2 = time.time()
+            active_deauth = sum(
+                1 for k, v in state.deauth_registry.items()
+                if not k.startswith('deauth_alerted_') and
+                   isinstance(v, list) and
+                   any(now2 - t <= DEAUTH_WINDOW for t in v)
+            )
 
         # Emit outside the lock to avoid blocking the sniffer threads
         socketio.emit('full_update', {
             "target_ssid": TARGET_SSID,
             "stats": {
-                "total":    snapshot_total,
-                "threats":  threats,
-                "trusted":  trusted,
-                "band_24":  sum(1 for n in networks if n['band'] == "2.4GHz"),
-                "band_5":   sum(1 for n in networks if n['band'] == "5GHz"),
-                "channels": snapshot_channels,
+                "total":         snapshot_total,
+                "threats":       threats,
+                "trusted":       trusted,
+                "band_24":       sum(1 for n in networks if n['band'] == "2.4GHz"),
+                "band_5":        sum(1 for n in networks if n['band'] == "5GHz"),
+                "channels":      snapshot_channels,
+                "deauth_total":  snapshot_deauth,
+                "deauth_active": active_deauth,
             },
             "networks": sorted(networks, key=lambda x: x['sort_key']),
             "alerts":    snapshot_alerts,
@@ -837,8 +1050,10 @@ if __name__ == '__main__':
     load_model()
     setup_hardware()
     threading.Thread(target=channel_hopper,  daemon=True).start()
-    threading.Thread(target=sniffer_worker,  args=(IFACE_24, "2.4GHz"), daemon=True).start()
-    threading.Thread(target=sniffer_worker,  args=(IFACE_50, "5GHz"),   daemon=True).start()
-    threading.Thread(target=emit_worker,     daemon=True).start()
+    threading.Thread(target=sniffer_worker,        args=(IFACE_24, "2.4GHz"), daemon=True).start()
+    threading.Thread(target=sniffer_worker,        args=(IFACE_50, "5GHz"),   daemon=True).start()
+    threading.Thread(target=deauth_sniffer_worker, args=(IFACE_24, "2.4GHz"), daemon=True).start()
+    threading.Thread(target=deauth_sniffer_worker, args=(IFACE_50, "5GHz"),   daemon=True).start()
+    threading.Thread(target=emit_worker,           daemon=True).start()
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
 
