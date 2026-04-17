@@ -50,7 +50,7 @@ def extract_features(pkt: Packet):
         radiotap = pkt[RadioTap]
         radiotap_length = getattr(radiotap, 'len', 0)
         radiotap_datarate = getattr(radiotap, 'Rate', 0)
-        radiotap_timestamp_ts = getattr(radiotap, 'Timestamp', 0)
+        radiotap_timestamp_ts = getattr(radiotap, 'timestamp', 0)
         wlan_radio_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
         radiotap_channel_flags = int(getattr(radiotap, 'ChannelFlags', 0))
         radiotap_channel_flags_ofdm = 1 if (radiotap_channel_flags & 0x0040) else 0 # OFDM flag is 7th bit
@@ -84,8 +84,8 @@ def extract_features(pkt: Packet):
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract AWID3-style features from PCAP files.")
     parser.add_argument("--normal-dir", default="../data/raw/normal", help="Directory containing normal PCAP files.")
-    parser.add_argument("--deauth-dir", default="../data/raw/deauth", help="Directory containing deauthentication PCAP files.")
-    parser.add_argument("--evil-twin-dir", default="../data/raw/evil_twin", help="Directory containing evil twin PCAP files.")
+    parser.add_argument("--deauth-dir", default="../data/raw/attack/deauth", help="Directory containing deauthentication PCAP files.")
+    parser.add_argument("--evil-twin-dir", default="../data/raw/attack/eviltwin", help="Directory containing evil twin PCAP files.")
     parser.add_argument("--output", default="../data/processed/Features.csv", help="Output CSV file path.")
     parser.add_argument("--target-ssid", default="FreeWiFi", help="SSID considered as evil twin attack traffic.")
     parser.add_argument("--count", type=int, default=-1, help="Max packets to read per PCAP (-1 = all).")
@@ -118,7 +118,7 @@ if __name__ == "__main__":
                 features = extract_features(pkt)
                 if category == 'evil-twin' and ssid == target_ssid:
                     features['label'] = 1  # Evil Twin
-                if category == 'deauth':
+                elif category == 'deauth' and features.get("wlan.fc.type") == 0 and features.get("wlan.fc.subtype") == 12 and features.get("wlan.fc.protected") == 0:
                     features['label'] = 2  # Deauthentication
                 else:
                     features['label'] = 0  # Trusted OR Unmanaged
