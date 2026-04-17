@@ -26,6 +26,9 @@ def extract_features(pkt: Packet):
     # Wlan Layer
     if pkt.haslayer(Dot11): # Wlan/Beacon Frame Layer
         fc = int(pkt[Dot11].FCfield)
+        wlan_fc_type = int(getattr(pkt, "type", 0))
+        wlan_fc_subtype = int(getattr(pkt, "subtype", 0))
+
         wlan_fc_frag = (fc >> 2) # wlan.fc.frag is 3th bit
         wlan_fc_retry = (fc >> 3) & 1 # wlan.fc.retry is 4th bit
         wlan_fc_pwrmgt = (fc >> 4) & 1 # wlan.fc.pwrmgt is 5rd bit
@@ -55,6 +58,8 @@ def extract_features(pkt: Packet):
 
 
     features = {
+        "wlan.fc.type": wlan_fc_type,
+        "wlan.fc.subtype": wlan_fc_subtype,
         "wlan.sa": wlan_sa,
         "wlan.ta": wlan_ta,
         "wlan.ra": wlan_ra,
