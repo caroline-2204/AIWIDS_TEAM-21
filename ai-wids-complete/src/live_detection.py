@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI-WIDS Live Detection Dashboard - v2.2 (DUAL-BAND + AI MODEL)
+AI-WIDS Live Detection Dashboard - (DUAL-BAND + AI MODEL)
 Loads wireless_ids.pt and runs real-time Evil Twin inference on every beacon.
 """
 import threading
@@ -23,7 +23,7 @@ OPENWRT_IP    = "192.168.32.55"
 TARGET_SSID   = "FreeWiFi"
 IFACE_24      = "phy0-mon0"
 IFACE_50      = "phy1-mon0"
-MODEL_PATH    = "../data/model/wireless_ids.pt"
+MODEL_PATH    = "../data/models/wireless_ids.pt"
 STALE_TIMEOUT       = 15    # seconds — remove a beacon BSSID after this long
 EVIL_THRESHOLD      = 0.45  # evil_prob must RISE above this to flip to EVIL TWIN
 SAFE_THRESHOLD      = 0.30  # evil_prob must FALL below this to flip back to TRUSTED
