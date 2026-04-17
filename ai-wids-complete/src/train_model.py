@@ -132,15 +132,12 @@ FEATURE_COLS = [
     "wlan_fc.pwrmgt",             # Power Management — client sleeping or awake
     "radiotap.length",            # RadioTap header length in bytes
     "radiotap.datarate",          # Transmission data rate (0.5 Mbps units)
-    # radiotap.timestamp.ts and radiotap.mactime intentionally excluded:
-    # they encode absolute capture time and perfectly separate classes recorded
-    # at different times — this is temporal data leakage, not a real signal.
+    "radiotap.timestamp.ts",      # RadioTap timestamp value
+    "radiotap.mactime",           # MAC-layer timestamp from RadioTap header
     "radiotap.signal.dbm",        # Received signal strength in dBm (e.g. -65)
     "radiotap.channel.flags.ofdm",# 1 if the channel uses OFDM modulation
     "radiotap.channel.flags.cck", # 1 if the channel uses CCK modulation
-    # frame.len excluded: evil twin device always produces 392-byte beacons while
-    # legitimate AP averages 270 bytes — model learns device identity, not attack.
-    # Re-include only after collecting evil twin data from multiple devices/positions.
+    "frame.len",                  # Total 802.11 frame length in bytes
 ]
 
 # Label column — matches what extract_features.py writes
@@ -148,7 +145,7 @@ LABEL_COL    = "label"
 LABEL_NORMAL = 0                  # extract_features.py writes 0 for normal/trusted
 LABEL_ATTACK = 1                  # extract_features.py writes 1 for evil twin
 
-N_FEATURES   = len(FEATURE_COLS)  # 13 (timestamps + frame.len removed to prevent leakage)
+N_FEATURES   = len(FEATURE_COLS)  # 16 # TODO: Adjust this
 
 
 # NEURAL NETWORK ARCHITECTURE
@@ -156,7 +153,7 @@ class WirelessIDS(nn.Module):
     """
     4-layer Feedforward Deep Neural Network for Evil Twin detection.
 
-    Architecture:  13 → 128 → 64 → 32 → 2
+    Architecture:  16 → 128 → 64 → 32 → 2
                    ReLU activations + Dropout(0.3) regularisation
 
     Why this design:
@@ -169,10 +166,10 @@ class WirelessIDS(nn.Module):
     - Architecture matches the pre-existing wireless_ids.pt checkpoint
     """
 
-    def __init__(self, input_size: int = 13, dropout_p: float = 0.3):
+    def __init__(self, input_size: int = 16, dropout_p: float = 0.3):
         """
         Args:
-            input_size : number of input features (14 after removing timestamp leakage)
+            input_size : number of input features (16 from extract_features.py)
             dropout_p  : fraction of neurons randomly disabled per pass (0.3 = 30%)
         """
         super().__init__()
@@ -292,6 +289,34 @@ def load_features(data_dir: str, sample_n: int = 0):
     for lbl, cnt in dist.items():
         name = label_names.get(lbl, str(lbl))
         print(f"    {name:25s} (label={lbl}): {cnt:10,}  ({100*cnt/len(df):.1f}%)")
+
+    # Feature leakage diagnostic — print per-class mean for each feature
+    # Any feature with near-zero overlap between classes is a leakage candidate
+    print(f"\n{CYN}[*] Feature means by class (leakage check):")
+    print(f"    {'Feature':<35s} {'normal(0)':>12} {'evil_twin(1)':>14} {'ratio':>8}")
+    print(f"    {'-'*72}")
+    for col in FEATURE_COLS:
+        if col not in df.columns:
+            continue
+        m0 = df.loc[df[LABEL_COL] == 0, col].mean()
+        m1 = df.loc[df[LABEL_COL] == 1, col].mean()
+        ratio = abs(m1 - m0) / (abs(m0) + 1e-9)
+        flag = "  <-- SUSPECT" if ratio > 0.5 else ""
+        print(f"    {col:<35s} {m0:>12.4f} {m1:>14.4f} {ratio:>8.3f}{flag}")
+
+    # Feature leakage diagnostic — print per-class mean for each feature
+    # Any feature with near-zero overlap between classes is a leakage candidate
+    print(f"\n{CYN}[*] Feature means by class (leakage check):")
+    print(f"    {'Feature':<35s} {'normal(0)':>12} {'evil_twin(1)':>14} {'ratio':>8}")
+    print(f"    {'-'*72}")
+    for col in FEATURE_COLS:
+        if col not in df.columns:
+            continue
+        m0 = df.loc[df[LABEL_COL] == 0, col].mean()
+        m1 = df.loc[df[LABEL_COL] == 1, col].mean()
+        ratio = abs(m1 - m0) / (abs(m0) + 1e-9)
+        flag = "  <-- SUSPECT" if ratio > 0.5 else ""
+        print(f"    {col:<35s} {m0:>12.4f} {m1:>14.4f} {ratio:>8.3f}{flag}")
 
     # Feature leakage diagnostic — print per-class mean for each feature
     # Any feature with near-zero overlap between classes is a leakage candidate
@@ -613,7 +638,7 @@ def main(args):
         optimizer, mode="min", patience=5, factor=0.5)
 
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"{CYN}[*] Model    : {N_FEATURES}→128→64→32→2  (timestamps excluded)")
+    print(f"{CYN}[*] Model    : {N_FEATURES}→128→64→32→2")
     print(f"    Params   : {n_params:,}  |  Dropout: {args.dropout}  |  LR: {args.lr}")
 
     # ── 7. Training loop ──────────────────────────────────────────────────
@@ -727,27 +752,26 @@ def parse_args():
         "--data_dir", default=DEFAULT_DATA_DIR,
         help="Folder containing Features.csv (default: data/processed/)"
     )
-    p.add_argument("--epochs",   type=int,   default=30,
-                   help="Max training epochs (default: 30)")
-    p.add_argument("--lr",       type=float, default=0.0005,
-                   help="Learning rate (default: 0.0005)")
+    p.add_argument("--epochs",   type=int,   default=50,
+                   help="Max training epochs (default: 50)")
+    p.add_argument("--lr",       type=float, default=0.001,
+                   help="Learning rate (default: 0.001)")
     p.add_argument("--batch",    type=int,   default=64,
                    help="Batch size (default: 64)")
-    p.add_argument("--dropout",  type=float, default=0.2,
-                   help="Dropout probability (default: 0.2)")
-    p.add_argument("--patience", type=int,   default=30,
-                   help="Early stopping patience in epochs (default: 30)")
+    p.add_argument("--dropout",  type=float, default=0.3,
+                   help="Dropout probability (default: 0.3)")
+    p.add_argument("--patience", type=int,   default=10,
+                   help="Early stopping patience in epochs (default: 10)")
     p.add_argument("--sample",   type=int,   default=0,
                    help="Subsample N rows for quick testing (0 = all data)")
     p.add_argument("--no-early-stop", dest="early_stop", action="store_false",
                    help="Disable early stopping")
     p.add_argument("--no-balance",    dest="balance",    action="store_false",
                    help="Disable class balancing (not recommended)")
-    p.set_defaults(early_stop=True, balance=True)
+    p.set_defaults(early_stop=False, balance=True)
     return p.parse_args()
 
 
 # ENTRY POINT
 if __name__ == "__main__":
     main(parse_args())
-
