@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AI-WIDS — Standalone Deauth Injector  (v3 — targeted, no channel conflict)
+#  AI-WIDS — Standalone Deauth Injector  (targeted, no channel conflict)
 #  Device  : TP-Link TL-WN722N (AR9271) on Kali Linux
 #  Purpose : Inject deauth frames ONLY at clients of the trusted FreeWiFi AP.
 #            Run this while live.py is running — dashboard detects the attack.
