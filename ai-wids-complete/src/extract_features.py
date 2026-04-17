@@ -84,7 +84,8 @@ def extract_features(pkt: Packet):
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract AWID3-style features from PCAP files.")
     parser.add_argument("--normal-dir", default="../data/raw/normal", help="Directory containing normal PCAP files.")
-    parser.add_argument("--attack-dir", default="../data/raw/attack", help="Directory containing attack PCAP files.")
+    parser.add_argument("--deauth-dir", default="../data/raw/deauth", help="Directory containing deauthentication PCAP files.")
+    parser.add_argument("--evil-twin-dir", default="../data/raw/evil_twin", help="Directory containing evil twin PCAP files.")
     parser.add_argument("--output", default="../data/processed/Features.csv", help="Output CSV file path.")
     parser.add_argument("--target-ssid", default="FreeWiFi", help="SSID considered as evil twin attack traffic.")
     parser.add_argument("--count", type=int, default=-1, help="Max packets to read per PCAP (-1 = all).")
@@ -96,7 +97,7 @@ if __name__ == "__main__":
 
     all_data = []
 
-    for category, path in [('normal', args.normal_dir), ('attack', args.attack_dir)]:
+    for category, path in [('normal', args.normal_dir), ('deauth', args.deauth_dir), ('evil-twin', args.evil_twin_dir)]:
         files = [f for f in os.listdir(path) if f.endswith('.pcap')]
 
         for file in files:
@@ -115,8 +116,10 @@ if __name__ == "__main__":
                         pass
 
                 features = extract_features(pkt)
-                if category == 'attack' and ssid == target_ssid:
+                if category == 'evil-twin' and ssid == target_ssid:
                     features['label'] = 1  # Evil Twin
+                if category == 'deauth':
+                    features['label'] = 2  # Deauthentication
                 else:
                     features['label'] = 0  # Trusted OR Unmanaged
 
