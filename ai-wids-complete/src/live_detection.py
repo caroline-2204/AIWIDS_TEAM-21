@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-AI-WIDS Live Detection Dashboard - (DUAL-BAND + AI MODEL)
-Loads wireless_ids.pt and runs real-time Evil Twin inference on every beacon.
+AI-WIDS Live Detection Dashboard - v2.3 (DUAL-BAND + 3-CLASS AI MODEL)
+Loads wireless_ids.pt and runs real-time inference on beacons and deauth frames.
+
+Model classes:
+    0 = normal / trusted AP
+    1 = evil twin attack
+    2 = deauth attack
 """
 import threading
 import subprocess
@@ -23,7 +28,7 @@ OPENWRT_IP    = "192.168.32.55"
 TARGET_SSID   = "FreeWiFi"
 IFACE_24      = "phy0-mon0"
 IFACE_50      = "phy1-mon0"
-MODEL_PATH    = "../data/models/wireless_ids.pt"
+MODEL_PATH    = "../data/model/wireless_ids.pt"
 STALE_TIMEOUT       = 15    # seconds — remove a beacon BSSID after this long
 EVIL_THRESHOLD      = 0.45  # evil_prob must RISE above this to flip to EVIL TWIN
 SAFE_THRESHOLD      = 0.30  # evil_prob must FALL below this to flip back to TRUSTED
@@ -32,21 +37,25 @@ HOP_INTERVAL        = 1     # seconds per channel — lower = faster detection
 DEAUTH_RATE_ALERT   = 3     # deauth frames/second sustained to trigger alert
 DEAUTH_WINDOW       = 5     # sliding window in seconds for rate calculation
 DEAUTH_HOLD_SECS    = 20    # keep deauth row visible for this long after last frame
-DEAUTH_MIN_RATE     = 1.0   # ignore stray deauth frames below this rate (frames/sec)
+DEAUTH_MIN_RATE     = 1.0   # minimum rate to UPDATE an existing attacker entry (frames/sec)
+                            # stray frames below this rate are ignored entirely
+DEAUTH_AI_EMA       = 0.2   # EMA smoothing for deauth AI confidence (lower = smoother)
 
 # Set this to your TRUSTED AP's BSSID — any other device broadcasting TARGET_SSID
 # is immediately flagged as Evil Twin (regardless of AI score).
 # Leave empty to rely on AI-only + duplicate-SSID heuristic.
 TRUSTED_BSSIDS: set = {"fa:c6:f7:9e:cf:0c"}   # ← your phone hotspot MAC (always lowercase)
 
-# --- AI MODEL DEFINITION (must match train_model.py exactly) ---
-class EvilTwinDetector(nn.Module):
-    def __init__(self, input_size):
+# --- AI MODEL DEFINITION (must match modeltrain.py WirelessIDS exactly) ---
+# Architecture: input → 128 → 64 → 32 → num_classes
+# num_classes is inferred from the checkpoint at load time (2 for old models, 3 for new).
+class WirelessIDS(nn.Module):
+    def __init__(self, input_size, num_classes=3):
         super().__init__()
         self.fc1     = nn.Linear(input_size, 128)
         self.fc2     = nn.Linear(128, 64)
         self.fc3     = nn.Linear(64, 32)
-        self.fc4     = nn.Linear(32, 2)
+        self.fc4     = nn.Linear(32, num_classes)   # 2=binary (old), 3=normal/evil/deauth (new)
         self.relu    = nn.ReLU()
         self.dropout = nn.Dropout(0.3)
 
@@ -466,7 +475,7 @@ DASHBOARD_HTML = """
     <div class="header">
         <h1>
             <span class="status-indicator"></span>
-            🛡️ AI-WIDS NOC Dashboard
+            🛡️AI Wireless Intrusion Detection System (AI-WIDS) NOC Dashboard
             <span class="update-indicator" id="update-flash"></span>
         </h1>
         <div style="color: var(--text-secondary); font-size: 0.85rem;">
@@ -526,7 +535,7 @@ DASHBOARD_HTML = """
                         <th>Channel</th>
                         <th>Band</th>
                         <th>MACs</th>
-                        <th>Confidence / Rate</th>
+                        <th>AI Confidence / Rate</th>
                         <th>Status</th>
                     </tr>
                 </thead>
@@ -594,9 +603,15 @@ DASHBOARD_HTML = """
                 let confCell;
                 if (isDeauth) {
                     if (n.type === 'DEAUTH ATTACK' && n.confidence > 0) {
-                        confCell = `<span style="color:#ff4444;font-weight:700;font-size:0.85rem;">${n.confidence}/s</span>`;
+                        const aiPart = (n.ai_conf > 0)
+                            ? ` <span style="color:#ff8888;font-size:0.75rem;">AI ${n.ai_conf}%</span>`
+                            : '';
+                        confCell = `<span style="color:#ff4444;font-weight:700;font-size:0.85rem;">${n.confidence}/s</span>${aiPart}`;
                     } else {
-                        confCell = `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`;
+                        const aiPart = (n.ai_conf > 0)
+                            ? `<span style="color:#aa4444;font-size:0.8rem;">AI ${n.ai_conf}%</span>`
+                            : `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`;
+                        confCell = aiPart;
                     }
                 } else if (noConf) {
                     confCell = `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`;
@@ -645,8 +660,9 @@ def load_model():
         return
     checkpoint = torch.load(MODEL_PATH, map_location='cpu')
 
-    # Infer actual input size from the saved weight — immune to key-name changes
-    input_size = checkpoint['model_state_dict']['fc1.weight'].shape[1]
+    # Infer input size and output classes from saved weights — immune to config changes
+    input_size  = checkpoint['model_state_dict']['fc1.weight'].shape[1]
+    num_classes = checkpoint['model_state_dict']['fc4.weight'].shape[0]   # 2 (old) or 3 (new)
 
     # modeltrain.py saves key "features"; older scripts used "feature_order"
     state.feature_order = (
@@ -656,10 +672,13 @@ def load_model():
     )
 
     state.scaler = checkpoint['scaler']
-    state.model  = EvilTwinDetector(input_size)
+    state.model  = WirelessIDS(input_size, num_classes=num_classes)
     state.model.load_state_dict(checkpoint['model_state_dict'])
     state.model.eval()
-    print(f"{Fore.GREEN}[+] Model loaded: {MODEL_PATH}  input_size={input_size}  features={state.feature_order}{Style.RESET_ALL}")
+
+    class_desc = {2: "normal/evil_twin (binary)", 3: "normal/evil_twin/deauth (3-class)"}
+    print(f"{Fore.GREEN}[+] Model loaded: {MODEL_PATH}")
+    print(f"    input_size={input_size}  num_classes={num_classes}  ({class_desc.get(num_classes, str(num_classes))}){Style.RESET_ALL}")
 
 
 def extract_features(pkt):
@@ -717,7 +736,12 @@ def extract_features(pkt):
 
 
 def run_inference(pkt):
-    """Run the model on one packet. Returns (label: int, confidence: float 0-100)."""
+    """Run the model on one packet.
+
+    Returns:
+        label      : int   — 0=normal, 1=evil_twin, 2=deauth
+        confidence : float — softmax probability of the predicted class (0–100)
+    """
     if state.model is None:
         return 0, 0.0
     feats    = extract_features(pkt)
@@ -804,6 +828,10 @@ def sniffer_worker(iface, band_label):
             is_target = (ssid == TARGET_SSID)
             if is_target:
                 label, confidence = run_inference(pkt)
+                # Beacon frames cannot be deauth frames — if 3-class model returns
+                # label=2 on a beacon, it is a misclassification; treat as normal (0).
+                if label == 2:
+                    label = 0
             else:
                 label, confidence = 0, 0.0   # UNMANAGED — no model needed
             now = time.time()
@@ -900,6 +928,12 @@ def deauth_sniffer_worker(iface, band_label):
             ch   = get_channel(pkt)
             now  = time.time()
 
+            # AI inference on the deauth frame.
+            # Only meaningful with the 3-class model (label=2 = deauth).
+            # Cap at 99 so the display never freezes on "100%".
+            ai_label, ai_conf = run_inference(pkt)
+            deauth_ai_conf = min(round(ai_conf), 99) if ai_label == 2 else 0
+
             with state.lock:
                 state.deauth_total += 1
                 if src not in state.deauth_registry:
@@ -910,12 +944,21 @@ def deauth_sniffer_worker(iface, band_label):
                 ]
                 rate = len(state.deauth_registry[src]) / DEAUTH_WINDOW
 
-                # Only track attacker entries above the minimum rate threshold.
-                # Stray deauth frames (rate < DEAUTH_MIN_RATE) are normal Wi-Fi
-                # management traffic (device roaming, AP-initiated disconnects)
-                # and should not appear in the table.
-                if rate >= DEAUTH_MIN_RATE:
-                    prev = state.deauth_attackers.get(src, {})
+                # Two-tier rate gating:
+                #   NEW entry:      requires rate >= DEAUTH_RATE_ALERT (3/s)
+                #                   — rules out brief bursts from normal AP management
+                #   UPDATE entry:   requires rate >= DEAUTH_MIN_RATE (1/s)
+                #                   — keeps existing confirmed entry alive
+                prev = state.deauth_attackers.get(src)
+                already_tracked = prev is not None
+
+                if (already_tracked and rate >= DEAUTH_MIN_RATE) or \
+                   (not already_tracked and rate >= DEAUTH_RATE_ALERT):
+                    prev = prev or {}
+                    # EMA smoothing so the AI% varies naturally rather than locking
+                    prev_ai   = prev.get('ai_conf', deauth_ai_conf)
+                    smooth_ai = round(DEAUTH_AI_EMA * deauth_ai_conf +
+                                      (1 - DEAUTH_AI_EMA) * prev_ai)
                     state.deauth_attackers[src] = {
                         'src':       src,
                         'dst':       dst,
@@ -925,6 +968,7 @@ def deauth_sniffer_worker(iface, band_label):
                         'ch':        ch if ch != '?' else prev.get('ch', '?'),
                         'last_seen': now,
                         'active':    True,
+                        'ai_conf':   smooth_ai,
                     }
 
                 if rate >= DEAUTH_RATE_ALERT:
@@ -1007,6 +1051,7 @@ def emit_worker():
                     "channel":    entry.get('ch', '?'),
                     "band":       entry['band'],
                     "confidence": round(cur_rate, 1) if still_active else 0,
+                    "ai_conf":    entry.get('ai_conf', 0),
                     "deauth_rate": True,
                     "sort_key":   -1 if still_active else -0.5,
                 })
