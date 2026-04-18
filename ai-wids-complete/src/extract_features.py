@@ -8,6 +8,10 @@ from tqdm import tqdm
 
 
 def extract_features(pkt: Packet):
+    wlan_sa = 0
+    wlan_ta = 0
+    wlan_ra = 0
+    wlan_seq = 0
     wlan_fc_ds = 0
     wlan_fc_protected = 0
     wlan_fc_moredata = 0
