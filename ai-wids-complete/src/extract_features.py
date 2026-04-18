@@ -8,6 +8,10 @@ from tqdm import tqdm
 
 
 def extract_features(pkt: Packet):
+    wlan_sa = 0
+    wlan_ta = 0
+    wlan_ra = 0
+    wlan_seq = 0
     wlan_fc_ds = 0
     wlan_fc_protected = 0
     wlan_fc_moredata = 0
@@ -18,7 +22,7 @@ def extract_features(pkt: Packet):
     radiotap_datarate = 0
     radiotap_timestamp_ts = 0
     radiotap_mactime = 0
-    radiotap_signal_dbm = 0
+    wlan_radio_signal_dbm = 0
     radiotap_channel_flags_ofdm = 0
     radiotap_channel_flags_cck = 0
     # Deauth-specific features
@@ -33,12 +37,24 @@ def extract_features(pkt: Packet):
     # Wlan Layer
     if pkt.haslayer(Dot11): # Wlan Layer
         fc = int(pkt[Dot11].FCfield)
+
         wlan_fc_frag = (fc >> 2) # wlan.fc.frag is 3th bit
         wlan_fc_retry = (fc >> 3) & 1 # wlan.fc.retry is 4th bit
         wlan_fc_pwrmgt = (fc >> 4) & 1 # wlan.fc.pwrmgt is 5rd bit
         wlan_fc_moredata = (fc >> 5) & 1 # wlan.fc.moredata is 6th bit
         wlan_fc_protected = (fc >> 6) & 1 # wlan.fc.protected is 7th bit
         wlan_fc_ds = (fc & 0x03) # wlan.fc.ds is 1st & 2nd bit
+
+        # Extract Mac Address
+        wlan_sa = getattr(pkt[Dot11], 'addr3', None)  # Source Address
+        wlan_sa = int(wlan_sa.replace(':', ''), 16) if wlan_sa else 0
+        wlan_ta = getattr(pkt[Dot11], 'addr2', None)  # Transmitter Address
+        wlan_ta = int(wlan_ta.replace(':', ''), 16) if wlan_ta else 0
+        wlan_ra = getattr(pkt[Dot11], 'addr1', None)  # Receiver Address
+        wlan_ra = int(wlan_ra.replace(':', ''), 16) if wlan_ra else 0
+
+        wlan_seq = getattr(pkt[Dot11], 'SC', 0) >> 4
+        
         # Broadcast destination (addr1 = receiver)
         addr1 = pkt[Dot11].addr1
         if addr1 and addr1.lower() == 'ff:ff:ff:ff:ff:ff':
@@ -48,9 +64,9 @@ def extract_features(pkt: Packet):
         radiotap = pkt[RadioTap]
         radiotap_length = getattr(radiotap, 'len', 0)
         radiotap_datarate = getattr(radiotap, 'Rate', 0)
-        radiotap_timestamp_ts = getattr(radiotap, 'Timestamp', 0)
+        radiotap_timestamp_ts = getattr(radiotap, 'timestamp', 0)
         radiotap_mactime = getattr(radiotap, 'mac_timestamp', 0)
-        radiotap_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
+        wlan_radio_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
         radiotap_channel_flags = int(getattr(radiotap, 'ChannelFlags', 0))
         radiotap_channel_flags_ofdm = 1 if (radiotap_channel_flags & 0x0040) else 0 # OFDM flag is 7th bit
         radiotap_channel_flags_cck = 1 if (radiotap_channel_flags & 0x0020) else 0 # CCK flag is 6th bit
@@ -60,19 +76,23 @@ def extract_features(pkt: Packet):
         wlan_reason = int(getattr(pkt[Dot11Deauth], 'reason', 0))
 
     features = {
-        "wlan_fc.type": wlan_fc_type,
-        "wlan_fc.subtype": wlan_fc_subtype,
-        "wlan_fc.ds": wlan_fc_ds,
-        "wlan_fc.protected": wlan_fc_protected,
-        "wlan_fc.moredata": wlan_fc_moredata,
-        "wlan_fc.frag": wlan_fc_frag,
-        "wlan_fc.retry": wlan_fc_retry,
-        "wlan_fc.pwrmgt": wlan_fc_pwrmgt,
+        "wlan.fc.type": wlan_fc_type,
+        "wlan.fc.subtype": wlan_fc_subtype,
+        "wlan.sa": wlan_sa,
+        "wlan.ta": wlan_ta,
+        "wlan.ra": wlan_ra,
+        "wlan.seq": wlan_seq,
+        "wlan.fc.ds": wlan_fc_ds,
+        "wlan.fc.protected": wlan_fc_protected,
+        "wlan.fc.moredata": wlan_fc_moredata,
+        "wlan.fc.frag": wlan_fc_frag,
+        "wlan.fc.retry": wlan_fc_retry,
+        "wlan.fc.pwrmgt": wlan_fc_pwrmgt,
         "radiotap.length": radiotap_length,
         "radiotap.datarate": radiotap_datarate,
         "radiotap.timestamp.ts": radiotap_timestamp_ts,
         "radiotap.mactime": radiotap_mactime,
-        "radiotap.signal.dbm": radiotap_signal_dbm,
+        "wlan_radio.signal_dbm": wlan_radio_signal_dbm,
         "radiotap.channel.flags.ofdm": radiotap_channel_flags_ofdm,
         "radiotap.channel.flags.cck": radiotap_channel_flags_cck,
         "frame.len": frame_len,
@@ -84,12 +104,12 @@ def extract_features(pkt: Packet):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract AWID3-style features from PCAP files.")
-    parser.add_argument("--normal-dir",  default="../data/raw/normal",         help="Directory containing normal PCAP files.")
-    parser.add_argument("--attack-dir",  default="../data/raw/attack/eviltwin",         help="Directory containing evil twin attack PCAP files.")
-    parser.add_argument("--deauth-dir",  default="../data/raw/attack/deauth",  help="Directory containing deauth attack PCAP files (label=2).")
-    parser.add_argument("--output",      default="../data/processed/Features.csv", help="Output CSV file path.")
-    parser.add_argument("--target-ssid", default="FreeWiFi",                  help="SSID considered as evil twin attack traffic.")
-    parser.add_argument("--count",       type=int, default=-1,                 help="Max packets to read per PCAP (-1 = all).")
+    parser.add_argument("--normal-dir", default="../data/raw/normal", help="Directory containing normal PCAP files.")
+    parser.add_argument("--deauth-dir", default="../data/raw/attack/deauth", help="Directory containing deauthentication PCAP files.")
+    parser.add_argument("--evil-twin-dir", default="../data/raw/attack/eviltwin", help="Directory containing evil twin PCAP files.")
+    parser.add_argument("--output", default="../data/processed/Features.csv", help="Output CSV file path.")
+    parser.add_argument("--target-ssid", default="FreeWiFi", help="SSID considered as evil twin attack traffic.")
+    parser.add_argument("--count", type=int, default=-1, help="Max packets to read per PCAP (-1 = all).")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -100,7 +120,7 @@ if __name__ == "__main__":
 
     categories = [
         ('normal', args.normal_dir),
-        ('attack', args.attack_dir),
+        ('evil-twin', args.evil_twin_dir),
         ('deauth', args.deauth_dir),
     ]
 
@@ -130,10 +150,10 @@ if __name__ == "__main__":
                         pass
 
                 features = extract_features(pkt)
-                if category == 'deauth':
-                    features['label'] = 2  # Deauth Attack
-                elif category == 'attack' and ssid == target_ssid:
+                if category == 'evil-twin' and ssid == target_ssid:
                     features['label'] = 1  # Evil Twin
+                elif category == 'deauth' and features.get("wlan.fc.type") == 0 and features.get("wlan.fc.subtype") == 12 and features.get("wlan.fc.protected") == 0:
+                    features['label'] = 2  # Deauthentication
                 else:
                     features['label'] = 0  # Trusted OR Unmanaged
 
