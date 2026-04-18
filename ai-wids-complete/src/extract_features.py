@@ -3,7 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import pandas as pd
-from scapy.all import rdpcap, Dot11, RadioTap, Dot11Elt, Packet, Raw
+from scapy.all import rdpcap, Dot11, RadioTap, Dot11Elt, Dot11Deauth, Packet, Raw
 from tqdm import tqdm                        
 
 
@@ -17,17 +17,22 @@ def extract_features(pkt: Packet):
     radiotap_length = 0
     radiotap_datarate = 0
     radiotap_timestamp_ts = 0
+    radiotap_mactime = 0
     wlan_radio_signal_dbm = 0
     radiotap_channel_flags_ofdm = 0
     radiotap_channel_flags_cck = 0
+    # Deauth-specific features
+    wlan_reason = 0            # Reason code in deauth/disassoc frames (0 for beacons)
+    wlan_da_is_broadcast = 0   # 1 if destination MAC is ff:ff:ff:ff:ff:ff
 
     frame_len = len(pkt)
 
+    wlan_fc_type = int(getattr(pkt, "type", 0))
+    wlan_fc_subtype = int(getattr(pkt, "subtype", 0))
+
     # Wlan Layer
-    if pkt.haslayer(Dot11): # Wlan/Beacon Frame Layer
+    if pkt.haslayer(Dot11): # Wlan Layer
         fc = int(pkt[Dot11].FCfield)
-        wlan_fc_type = int(getattr(pkt, "type", 0))
-        wlan_fc_subtype = int(getattr(pkt, "subtype", 0))
 
         wlan_fc_frag = (fc >> 2) # wlan.fc.frag is 3th bit
         wlan_fc_retry = (fc >> 3) & 1 # wlan.fc.retry is 4th bit
@@ -45,17 +50,26 @@ def extract_features(pkt: Packet):
         wlan_ra = int(wlan_ra.replace(':', ''), 16) if wlan_ra else 0
 
         wlan_seq = getattr(pkt[Dot11], 'SC', 0) >> 4
+        
+        # Broadcast destination (addr1 = receiver)
+        addr1 = pkt[Dot11].addr1
+        if addr1 and addr1.lower() == 'ff:ff:ff:ff:ff:ff':
+            wlan_da_is_broadcast = 1
 
     if pkt.haslayer(RadioTap):
         radiotap = pkt[RadioTap]
         radiotap_length = getattr(radiotap, 'len', 0)
         radiotap_datarate = getattr(radiotap, 'Rate', 0)
         radiotap_timestamp_ts = getattr(radiotap, 'timestamp', 0)
+        radiotap_mactime = getattr(radiotap, 'mac_timestamp', 0)
         wlan_radio_signal_dbm = getattr(radiotap, 'dBm_AntSignal', 0)
         radiotap_channel_flags = int(getattr(radiotap, 'ChannelFlags', 0))
         radiotap_channel_flags_ofdm = 1 if (radiotap_channel_flags & 0x0040) else 0 # OFDM flag is 7th bit
         radiotap_channel_flags_cck = 1 if (radiotap_channel_flags & 0x0020) else 0 # CCK flag is 6th bit
 
+    # Deauth reason code (Dot11Deauth layer; 0 for all other frame types)
+    if pkt.haslayer(Dot11Deauth):
+        wlan_reason = int(getattr(pkt[Dot11Deauth], 'reason', 0))
 
     features = {
         "wlan.fc.type": wlan_fc_type,
@@ -73,10 +87,13 @@ def extract_features(pkt: Packet):
         "radiotap.length": radiotap_length,
         "radiotap.datarate": radiotap_datarate,
         "radiotap.timestamp.ts": radiotap_timestamp_ts,
+        "radiotap.mactime": radiotap_mactime,
         "wlan_radio.signal_dbm": wlan_radio_signal_dbm,
         "radiotap.channel.flags.ofdm": radiotap_channel_flags_ofdm,
         "radiotap.channel.flags.cck": radiotap_channel_flags_cck,
         "frame.len": frame_len,
+        "wlan.reason": wlan_reason,
+        "wlan.da_is_broadcast": wlan_da_is_broadcast,
     }
 
     return features
@@ -97,11 +114,24 @@ if __name__ == "__main__":
 
     all_data = []
 
-    for category, path in [('normal', args.normal_dir), ('deauth', args.deauth_dir), ('evil-twin', args.evil_twin_dir)]:
+    categories = [
+        ('normal', args.normal_dir),
+        ('evil-twin', args.evil_twin_dir),
+        ('deauth', args.deauth_dir),
+    ]
+
+    for category, path in categories:
+        if not os.path.isdir(path):
+            print(f"[!] Skipping '{category}' — directory not found: {path}")
+            continue
+
         files = [f for f in os.listdir(path) if f.endswith('.pcap')]
+        if not files:
+            print(f"[!] No PCAP files in '{path}' — skipping.")
+            continue
 
         for file in files:
-            print(f"Processing {file}...")
+            print(f"Processing [{category}] {file}...")
             pkts = rdpcap(os.path.join(path, file), count=args.count)
 
             for pkt in tqdm(pkts):
@@ -116,8 +146,10 @@ if __name__ == "__main__":
                         pass
 
                 features = extract_features(pkt)
-                if category == 'evil-twin' and ssid == target_ssid:
-                    features['label'] = 1  # Evil Twin
+                if category == 'deauth':
+                    features['label'] = 1  # Deauth Attack
+                elif category == 'evil-twin' and ssid == target_ssid:
+                    features['label'] = 2  # Evil Twin
                 elif category == 'deauth' and features.get("wlan.fc.type") == 0 and features.get("wlan.fc.subtype") == 12 and features.get("wlan.fc.protected") == 0:
                     features['label'] = 2  # Deauthentication
                 else:
@@ -126,6 +158,12 @@ if __name__ == "__main__":
                 all_data.append(features)
 
     df = pd.DataFrame(all_data)
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
     df.to_csv(args.output, index=False)
     print(f"Saved {len(df)} rows to {args.output}")
+    label_counts = df['label'].value_counts().sort_index()
+    label_names  = {0: "normal", 1: "evil_twin", 2: "deauth"}
+    for lbl, cnt in label_counts.items():
+        print(f"  label={lbl} ({label_names.get(lbl, '?'):10s}): {cnt:,}")
+
 

@@ -1,72 +1,96 @@
 #!/bin/bash
 ###############################################################################
-# AI-WIDS EVIL TWIN TRAFFIC COLLECTION
+# AI-WIDS DUAL-BAND TRAFFIC COLLECTION (UCI PERSISTENT VERSION)
 ###############################################################################
-# Purpose: Collect Evil Twin attack traffic from Ubiquiti U6+ OpenWrt router
-# Setup:
-#   - AP Phone: FreeWiFi hotspot (Channel 1, 2.4GHz) - Legitimate AP
-#   - ET Phone: FreeWiFi hotspot (Channel 1, 2.4GHz) - Evil Twin AP
-#   - Phone A/B: Connect to either FreeWiFi hotspot
-# Output: ../data/raw/attack/evil_twin_YYYYMMDD_HHMMSS.pcap
-###############################################################################
+set -e
 
-set -e                                       # Exit on error
 # ===========================
 # CONFIGURATION
 # ===========================
-OPENWRT_IP="192.168.32.55"                   # OpenWrt router IP address
-INTERFACE="phy0-mon0"                        # Monitor mode interface (2.4GHz, Channel 1)
-DURATION=300                                 # Capture duration in seconds (5 minutes)
-OUTPUT_DIR_NOR="../data/raw/normal"              # Output directory for PCAP files
-OUTPUT_DIR_ATT="../data/raw/attack"              # Output directory for PCAP files
+OPENWRT_IP="192.168.32.55"
+CH_2G=1   
+CH_5G=36  
+DURATION=300
+OUT_NOR="../data/raw/normal"
+OUT_ATT="../data/raw/attack"
 
 # ===========================
-# START CAPTURE
+# REMOTE HARDWARE SETUP
 # ===========================
+prepare_router() {
+    echo "[*] Configuring Router System for Persistent Monitor Mode..."
+    ssh root@$OPENWRT_IP << EOF
+        # 1. Stop network to apply hardware changes safely
+        /etc/init.d/network stop
 
-# Normal Traffic - Clients connect to Normal
-echo "AI-WIDS Normal Traffic Collection"
-echo "OpenWrt: $OPENWRT_IP | Server: $SERVER_IP"
-echo "Duration: $DURATION seconds per capture"
-echo ""
-# Channel 1 (2.4GHz) - Normal browsing
-echo "[*] Capture 1: Channel 1 (2.4GHz) - Normal browsing"
-echo "Phone A/B: Normal browsing, YouTube, browsing"
-echo "Press Enter to start..."
-read
-# Create output directory Normal
-mkdir -p "$OUTPUT_DIR_NOR"
-NOR_OUTPUT_FILE="$OUTPUT_DIR_NOR/normal_traffic_$(date +%Y%m%d_%H%M%S).pcap"
-echo "Starting capture Browsing, Streaming, Apps Traffics..."
-ssh root@$OPENWRT_IP "tcpdump -i $INTERFACE -w - -s 0" > "$NOR_OUTPUT_FILE" & TCP_PID=$!
-sleep $DURATION
-kill $TCP_PID 2>/dev/null || true
+        # 2. Configure Radio 0 (2.4GHz) via UCI
+        uci set wireless.radio0.channel='$CH_2G'
+        uci set wireless.mon0=wifi-iface
+        uci set wireless.mon0.device='radio0'
+        uci set wireless.mon0.mode='monitor'
+        uci set wireless.mon0.ifname='phy0-mon0'
 
-# Evil Twin Attack - Clients connect to both APs
-echo "AI-WIDS Evil Twin Attack Traffic Collection"
-echo "Setup:"
-echo "1. AP Phone: Enable FreeWiFi hotspot (Channel 1)"
-echo "2. ET Phone: Enable FreeWiFi hotspot (Channel 1)"
-echo "3. Phone A: Connect to AP Phone FreeWiFi"
-echo "4. Phone B: Connect to ET Phone FreeWiFi"
-echo "5. Both phones: Browse, stream during capture"
-echo ""
-echo "Press Enter when ready..."
-read
-# Create output directory Traffic
-mkdir -p "$OUTPUT_DIR_ATT"          
-ATT_OUTPUT_FILE="$OUTPUT_DIR_ATT/evil_twin_traffic_$(date +%Y%m%d_%H%M%S).pcap"
-echo "Starting capture Attack Traffics..."
-ssh root@$OPENWRT_IP "tcpdump -i $INTERFACE -w - -s 0" > "$ATT_OUTPUT_FILE" & TCP_PID=$!
-sleep $DURATION
-kill $TCP_PID 2>/dev/null || true
+        # 3. Configure Radio 1 (5GHz) via UCI
+        uci set wireless.radio1.channel='$CH_5G'
+        uci set wireless.mon1=wifi-iface
+        uci set wireless.mon1.device='radio1'
+        uci set wireless.mon1.mode='monitor'
+        uci set wireless.mon1.ifname='phy1-mon0'
 
-echo ""
-echo "✅ Normal traffic captures complete:"
-ls -lh "$NOR_OUTPUT_FILE"/*.pcap
-echo ""
-echo "✅ Evil Twin attack captures complete:"
-ls -lh "$ATT_OUTPUT_FILE"/*.pcap
-echo ""
-echo "{Fore.GREEN} Next: ./extract_features.py {Style.RESET_ALL}\n"
+        # 4. Commit and Restart
+        uci commit wireless
+        /etc/init.d/network start
+        sleep 5
 
+        # 5. Force Up
+        ifconfig phy0-mon0 up
+        ifconfig phy1-mon0 up
+        
+        echo "[SUCCESS] Hardware state:"
+        iw dev | grep type
+EOF
+}
+
+# ===========================
+# CAPTURE LOGIC
+# ===========================
+run_capture() {
+    local folder=$1
+    local prefix=$2
+    mkdir -p "$folder"
+    TS=$(date +%Y%m%d_%H%M%S)
+
+    echo "[*] Starting $prefix Dual-Band Capture (5 Minutes)..."
+    
+    # -l: line buffered, -U: packet buffered (Critical for SSH streaming)
+    # -y IEEE802_11_RADIO: ensures radiotap headers are included
+    ssh root@$OPENWRT_IP "tcpdump -i phy0-mon0 -y IEEE802_11_RADIO -l -U -w - -s 0" > "$folder/${prefix}_2g_$TS.pcap" & P1=$!
+    ssh root@$OPENWRT_IP "tcpdump -i phy1-mon0 -y IEEE802_11_RADIO -l -U -w - -s 0" > "$folder/${prefix}_5g_$TS.pcap" & P2=$!
+
+    sleep $DURATION
+    kill $P1 $P2 2>/dev/null || true
+    echo "✓ $prefix Capture Finished."
+}
+
+# ===========================
+# MAIN EXECUTION
+# ===========================
+prepare_router
+
+echo "-----------------------------------------------------"
+echo "PHASE 1: NORMAL TRAFFIC (Trusted + Unmanaged)"
+echo "-----------------------------------------------------"
+echo "1. AP Phone: ENABLE 'FreeWiFi' (Ch $CH_2G or $CH_5G)"
+echo "2. Phone A/B: Connect to AP Phone"
+read -p "Press [Enter] to start..."
+run_capture "$OUT_NOR" "normal"
+
+echo -e "\n-----------------------------------------------------"
+echo "PHASE 2: ATTACK TRAFFIC (Evil Twin)"
+echo "-----------------------------------------------------"
+echo "1. AP Phone: TURN OFF"
+echo "2. ET Phone: ENABLE 'FreeWiFi' (Ch $CH_2G or $CH_5G)"
+read -p "Press [Enter] to start..."
+run_capture "$OUT_ATT" "attack"
+
+echo -e "\n[DONE] All PCAPs saved to ../data/raw/"
