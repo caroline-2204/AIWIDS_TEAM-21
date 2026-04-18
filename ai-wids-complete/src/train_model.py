@@ -25,6 +25,10 @@ Features.csv is produced by extract_features.py and contains these columns:
     ─────────────────────    ─────────────────────────────────────────────────
     wlan_fc.type             Frame type: 0=management, 1=control, 2=data
     wlan_fc.subtype          Subtype within the frame type (0–15)
+    wlan.sa                    Source MAC address (converted to integer)
+    wlan.ta                    Transmitter MAC address (converted to integer)
+    wlan.ra                    Receiver MAC address (converted to integer)
+    wlan.seq                   Sequence number — increments with each new frame from a device
     wlan_fc.ds               To/From Distribution System bits
     wlan_fc.protected        Protected Frame flag — strongest evil twin signal
     wlan_fc.moredata         More Data flag
@@ -35,11 +39,12 @@ Features.csv is produced by extract_features.py and contains these columns:
     radiotap.datarate        Data rate in 0.5Mbps units
     radiotap.timestamp.ts    RadioTap timestamp
     radiotap.mactime         MAC timestamp from RadioTap
-    radiotap.signal.dbm      Signal strength in dBm
+    wlan_radio.signal_dbm      Signal strength in dBm
     radiotap.channel.flags.ofdm  1 if OFDM channel
     radiotap.channel.flags.cck   1 if CCK channel
     frame.len                Total frame length in bytes
-    label                    0 = normal/trusted, 1 = evil twin
+    wlan.reason             Deauth reason code (0 for non-deauth frames)
+    label                    0 = normal/trusted, 1 = evil twin, 2 = deauth
 """
 
 # IMPORTS
@@ -123,6 +128,10 @@ os.makedirs(PLOT_DIR,  exist_ok=True)
 FEATURE_COLS = [
     "wlan_fc.type",               # Frame type: 0=management, 1=control, 2=data
     "wlan_fc.subtype",            # Subtype within the type category (0–15)
+    "wlan.sa",                    # Source MAC address (converted to int)
+    "wlan.ta",                    # Transmitter MAC address (converted to int)
+    "wlan.ra",                    # Receiver MAC address (converted to int)
+    "wlan.seq",                   # Sequence number — increments with each new frame from a device
     "wlan_fc.ds",                 # To/From DS bits — indicates infrastructure mode
     "wlan_fc.protected",          # Protected Frame flag — STRONGEST evil twin signal
                                   #   Legitimate APs encrypt frames; evil twins often don't
@@ -132,10 +141,11 @@ FEATURE_COLS = [
     "wlan_fc.pwrmgt",             # Power Management — client sleeping or awake
     "radiotap.length",            # RadioTap header length in bytes
     "radiotap.datarate",          # Transmission data rate (0.5 Mbps units)
+    "radiotap.timestamp.ts",      # RadioTap timestamp (leaky, encodes capture time)
     # radiotap.timestamp.ts and radiotap.mactime intentionally excluded:
     # they encode absolute capture time and perfectly separate classes recorded
     # at different times — this is temporal data leakage, not a real signal.
-    "radiotap.signal.dbm",        # Received signal strength in dBm (e.g. -65)
+    "wlan_radio.signal_dbm",        # Received signal strength in dBm (e.g. -65)
     "radiotap.channel.flags.ofdm",# 1 if the channel uses OFDM modulation
     "radiotap.channel.flags.cck", # 1 if the channel uses CCK modulation
     # frame.len excluded: evil twin device always produces 392-byte beacons while
@@ -146,7 +156,8 @@ FEATURE_COLS = [
 # Label column — matches what extract_features.py writes
 LABEL_COL    = "label"
 LABEL_NORMAL = 0                  # extract_features.py writes 0 for normal/trusted
-LABEL_ATTACK = 1                  # extract_features.py writes 1 for evil twin
+LABEL_EVIL_TWIN = 1                  # extract_features.py writes 1 for evil twin
+LABEL_DEAUTH  = 2                 # extract_features.py writes 2 for deauth attacks (not used in this model)
 
 N_FEATURES   = len(FEATURE_COLS)  # 13 (timestamps + frame.len removed to prevent leakage)
 
@@ -156,7 +167,7 @@ class WirelessIDS(nn.Module):
     """
     4-layer Feedforward Deep Neural Network for Evil Twin detection.
 
-    Architecture:  13 → 128 → 64 → 32 → 2
+    Architecture:  13 → 128 → 64 → 32 → 3
                    ReLU activations + Dropout(0.3) regularisation
 
     Why this design:
@@ -181,9 +192,10 @@ class WirelessIDS(nn.Module):
         self.fc1 = nn.Linear(input_size, 128)    # 16 features → 128 neurons
         self.fc2 = nn.Linear(128, 64)            # 128 neurons → 64 neurons
         self.fc3 = nn.Linear(64, 32)             # 64 neurons  → 32 neurons
-        self.fc4 = nn.Linear(32, 2)              # 32 neurons  → 2 outputs
+        self.fc4 = nn.Linear(32, 3)              # 32 neurons  → 3 outputs
                                                  #   output[0] = score for class 0 (normal)
                                                  #   output[1] = score for class 1 (evil twin)
+                                                 #   output[2] = score for class 2 (deauth)
 
         self.relu    = nn.ReLU()                 # ReLU: max(0, x) — adds non-linearity
         self.dropout = nn.Dropout(p=dropout_p)   # Zeros random neurons during training
@@ -274,7 +286,7 @@ def load_features(data_dir: str, sample_n: int = 0):
     df[LABEL_COL] = df[LABEL_COL].dropna().astype(int)
 
     # Filter to binary: 0 (normal) and 1 (evil twin)
-    df = df[df[LABEL_COL].isin([LABEL_NORMAL, LABEL_ATTACK])].copy()
+    df = df[df[LABEL_COL].isin([LABEL_NORMAL, LABEL_EVIL_TWIN, LABEL_DEAUTH])].copy()
     print(f"    After label filter  : {len(df):,} rows")
 
     if len(df) == 0:
@@ -287,7 +299,7 @@ def load_features(data_dir: str, sample_n: int = 0):
 
     # Class distribution
     dist = df[LABEL_COL].value_counts().sort_index()
-    label_names = {0: "normal", 1: "evil_twin"}
+    label_names = {0: "normal", 1: "evil_twin", 2: "deauth"}
     print(f"\n{CYN}[*] Class distribution:")
     for lbl, cnt in dist.items():
         name = label_names.get(lbl, str(lbl))
@@ -303,9 +315,10 @@ def load_features(data_dir: str, sample_n: int = 0):
             continue
         m0 = df.loc[df[LABEL_COL] == 0, col].mean()
         m1 = df.loc[df[LABEL_COL] == 1, col].mean()
+        m2 = df.loc[df[LABEL_COL] == 2, col].mean() 
         ratio = abs(m1 - m0) / (abs(m0) + 1e-9)
         flag = "  <-- SUSPECT" if ratio > 0.5 else ""
-        print(f"    {col:<35s} {m0:>12.4f} {m1:>14.4f} {ratio:>8.3f}{flag}")
+        print(f"    {col:<35s} {m0:>12.4f} {m1:>14.4f} {m2:>14.4f} {ratio:>8.3f}{flag}")
 
     # Handle missing feature columns
     # If extract_features.py didn't produce a column, fill with 0
@@ -325,7 +338,7 @@ def load_features(data_dir: str, sample_n: int = 0):
     if sample_n > 0 and len(df) > sample_n:
         per_class = sample_n // 2
         parts = []
-        for lbl in [LABEL_NORMAL, LABEL_ATTACK]:
+        for lbl in [LABEL_NORMAL, LABEL_EVIL_TWIN, LABEL_DEAUTH]:
             subset = df[df[LABEL_COL] == lbl]
             parts.append(subset.sample(min(len(subset), per_class), random_state=42))
         df = pd.concat(parts).sample(frac=1, random_state=42).reset_index(drop=True)
@@ -535,7 +548,7 @@ def plot_dashboard(history, y_test, test_preds, class_names):
         f"  Total Epochs         : {len(history['tr_loss'])}\n\n"
         f"  Model Parameters     : {history.get('model_params', 0):,}\n"
         f"  Dataset Size         : {history.get('dataset_size', 0):,} samples\n"
-        f"\n  Architecture : {N_FEATURES}→128→64→32→2\n"
+        f"\n  Architecture : {N_FEATURES}→128→64→32→3\n"
         f"  Optimiser    : Adam  |  Dropout: 0.3"
     )
     axes[1, 1].text(0.05, 0.95, summary, fontsize=11, family="monospace",
@@ -695,7 +708,7 @@ def main(args):
 
     # Map integer labels back to names for the report
     class_names = [str(c) for c in le.classes_]
-    label_name_map = {0: "normal", 1: "evil_twin"}
+    label_name_map = {0: "normal", 1: "evil_twin", 2: "deauth"}
     class_names = [label_name_map.get(int(c), str(c)) for c in le.classes_]
 
     print(f"\n{CYN}{'─'*62}  Test Set Results")
