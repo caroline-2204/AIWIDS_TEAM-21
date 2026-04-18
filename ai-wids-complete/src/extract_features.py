@@ -146,10 +146,8 @@ if __name__ == "__main__":
                         pass
 
                 features = extract_features(pkt)
-                if category == 'deauth':
-                    features['label'] = 1  # Deauth Attack
-                elif category == 'evil-twin' and ssid == target_ssid:
-                    features['label'] = 2  # Evil Twin
+                if category == 'evil-twin' and ssid == target_ssid:
+                    features['label'] = 1  # Evil Twin
                 elif category == 'deauth' and features.get("wlan.fc.type") == 0 and features.get("wlan.fc.subtype") == 12 and features.get("wlan.fc.protected") == 0:
                     features['label'] = 2  # Deauthentication
                 else:
