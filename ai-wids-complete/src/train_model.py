@@ -129,7 +129,7 @@ FEATURE_COLS = [
     "wlan_fc.type",               # Frame type: 0=management, 1=control, 2=data
     "wlan_fc.subtype",            # Subtype within the type category (0–15)
     "wlan.sa",                    # Source MAC address (converted to int)
-    "wlan.ta",                    # Transmitter MAC address (converted to int)
+    # "wlan.ta",                    # Transmitter MAC address (converted to int)
     "wlan.ra",                    # Receiver MAC address (converted to int)
     "wlan.seq",                   # Sequence number — increments with each new frame from a device
     "wlan_fc.ds",                 # To/From DS bits — indicates infrastructure mode
@@ -146,7 +146,7 @@ FEATURE_COLS = [
     # they encode absolute capture time and perfectly separate classes recorded
     # at different times — this is temporal data leakage, not a real signal.
     "wlan_radio.signal_dbm",        # Received signal strength in dBm (e.g. -65)
-    "radiotap.channel.flags.ofdm",# 1 if the channel uses OFDM modulation
+    # "radiotap.channel.flags.ofdm",# 1 if the channel uses OFDM modulation
     "radiotap.channel.flags.cck", # 1 if the channel uses CCK modulation
     # frame.len excluded: evil twin device always produces 392-byte beacons while
     # legitimate AP averages 270 bytes — model learns device identity, not attack.
