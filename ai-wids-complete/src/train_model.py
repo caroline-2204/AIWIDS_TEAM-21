@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-train_model.py — AI-WIDS Evil Twin Detection
+train_model.py — AI-WIDS Threat Detection (Evil Twin + Deauth)
 Reads Features.csv produced by extract_features.py and trains a Deep Neural
-Network to classify Wi-Fi packets as normal (0) or evil twin (1).
+Network to classify Wi-Fi packets as:
+    0 = normal/trusted
+    1 = evil twin
+    2 = deauth attack
 
 Execution (always run from the project root, not from inside src/):
     python make_test_data.py
     python src/train_model.py --data_dir data/processed --sample 2000 --epochs 10
     #once feature extraction added
     python src/train_model.py --data_dir data/processed --epochs 50
-    
+
     python src/train_model.py                          # full training run
     python src/train_model.py --sample 2000 --epochs 10  # quick test
 
@@ -25,6 +28,7 @@ Features.csv is produced by extract_features.py and contains these columns:
     ─────────────────────    ─────────────────────────────────────────────────
     wlan_fc.type             Frame type: 0=management, 1=control, 2=data
     wlan_fc.subtype          Subtype within the frame type (0–15)
+                             Key deauth signal: subtype=12 (0x0C)
     wlan_fc.ds               To/From Distribution System bits
     wlan_fc.protected        Protected Frame flag — strongest evil twin signal
     wlan_fc.moredata         More Data flag
@@ -39,7 +43,7 @@ Features.csv is produced by extract_features.py and contains these columns:
     radiotap.channel.flags.ofdm  1 if OFDM channel
     radiotap.channel.flags.cck   1 if CCK channel
     frame.len                Total frame length in bytes
-    label                    0 = normal/trusted, 1 = evil twin
+    label                    0 = normal/trusted, 1 = evil twin, 2 = deauth attack
 """
 
 # IMPORTS
@@ -60,6 +64,7 @@ from torch.utils.data import (
 from sklearn.model_selection import train_test_split   # Split into train/val/test
 from sklearn.preprocessing import StandardScaler       # Normalise features (mean=0, std=1)
 from sklearn.preprocessing import LabelEncoder         # Encode labels as integers
+from sklearn.preprocessing import label_binarize       # One-vs-rest binarisation for multi-class ROC-AUC
 from sklearn.metrics import (
     classification_report,                   # Per-class precision/recall/F1
     confusion_matrix,                        # True/false positive breakdown
@@ -147,6 +152,9 @@ FEATURE_COLS = [
 LABEL_COL    = "label"
 LABEL_NORMAL = 0                  # extract_features.py writes 0 for normal/trusted
 LABEL_ATTACK = 1                  # extract_features.py writes 1 for evil twin
+LABEL_DEAUTH = 2                  # extract_features.py writes 2 for deauth attack
+                                  #   Key frame marker: wlan_fc.type=0, wlan_fc.subtype=12
+N_CLASSES    = 3                  # normal / evil twin / deauth
 
 N_FEATURES   = len(FEATURE_COLS)  # 13 (timestamps + frame.len removed to prevent leakage)
 
@@ -154,36 +162,43 @@ N_FEATURES   = len(FEATURE_COLS)  # 13 (timestamps + frame.len removed to preven
 # NEURAL NETWORK ARCHITECTURE
 class WirelessIDS(nn.Module):
     """
-    4-layer Feedforward Deep Neural Network for Evil Twin detection.
+    4-layer Feedforward Deep Neural Network for Wi-Fi threat detection.
 
-    Architecture:  13 → 128 → 64 → 32 → 2
+    Architecture:  13 → 128 → 64 → 32 → 3
                    ReLU activations + Dropout(0.3) regularisation
 
+    Classes:
+        0 = normal / trusted AP
+        1 = evil twin attack
+        2 = deauth attack (wlan_fc.type=0, wlan_fc.subtype=12)
+
     Why this design:
-    - 4 layers learn non-linear combinations of the 16 input features
+    - 4 layers learn non-linear combinations of the 13 input features
     - Width decreases each layer (128→64→32) to progressively compress
-      the feature space down to a binary decision
+      the feature space down to a 3-class decision
     - Dropout randomly disables 30% of neurons during training to
       prevent memorising the training data (overfitting)
-    - Output is 2 raw logits; CrossEntropyLoss applies softmax internally
-    - Architecture matches the pre-existing wireless_ids.pt checkpoint
+    - Output is 3 raw logits; CrossEntropyLoss applies softmax internally
     """
 
-    def __init__(self, input_size: int = 13, dropout_p: float = 0.3):
+    def __init__(self, input_size: int = 13, num_classes: int = N_CLASSES,
+                 dropout_p: float = 0.3):
         """
         Args:
-            input_size : number of input features (14 after removing timestamp leakage)
-            dropout_p  : fraction of neurons randomly disabled per pass (0.3 = 30%)
+            input_size  : number of input features (13 after removing timestamp leakage)
+            num_classes : number of output classes (3: normal / evil twin / deauth)
+            dropout_p   : fraction of neurons randomly disabled per pass (0.3 = 30%)
         """
         super().__init__()
 
         # Fully connected layers — each Linear(in, out) learns a weight matrix
-        self.fc1 = nn.Linear(input_size, 128)    # 16 features → 128 neurons
-        self.fc2 = nn.Linear(128, 64)            # 128 neurons → 64 neurons
-        self.fc3 = nn.Linear(64, 32)             # 64 neurons  → 32 neurons
-        self.fc4 = nn.Linear(32, 2)              # 32 neurons  → 2 outputs
-                                                 #   output[0] = score for class 0 (normal)
-                                                 #   output[1] = score for class 1 (evil twin)
+        self.fc1 = nn.Linear(input_size, 128)      # 13 features → 128 neurons
+        self.fc2 = nn.Linear(128, 64)              # 128 neurons → 64 neurons
+        self.fc3 = nn.Linear(64, 32)               # 64 neurons  → 32 neurons
+        self.fc4 = nn.Linear(32, num_classes)      # 32 neurons  → 3 outputs
+                                                   #   output[0] = score for class 0 (normal)
+                                                   #   output[1] = score for class 1 (evil twin)
+                                                   #   output[2] = score for class 2 (deauth)
 
         self.relu    = nn.ReLU()                 # ReLU: max(0, x) — adds non-linearity
         self.dropout = nn.Dropout(p=dropout_p)   # Zeros random neurons during training
@@ -273,21 +288,24 @@ def load_features(data_dir: str, sample_n: int = 0):
     df[LABEL_COL] = pd.to_numeric(df[LABEL_COL], errors="coerce")
     df[LABEL_COL] = df[LABEL_COL].dropna().astype(int)
 
-    # Filter to binary: 0 (normal) and 1 (evil twin)
-    df = df[df[LABEL_COL].isin([LABEL_NORMAL, LABEL_ATTACK])].copy()
+    # Filter to 3 classes: 0 (normal), 1 (evil twin), 2 (deauth)
+    df = df[df[LABEL_COL].isin([LABEL_NORMAL, LABEL_ATTACK, LABEL_DEAUTH])].copy()
     print(f"    After label filter  : {len(df):,} rows")
 
     if len(df) == 0:
         actual = pd.concat(frames)[LABEL_COL].dropna().unique()[:10]
         raise ValueError(
-            f"No rows matched label 0 (normal) or 1 (evil twin).\n"
+            f"No rows matched label 0 (normal), 1 (evil twin), or 2 (deauth).\n"
             f"Labels found in your CSV: {list(actual)}\n"
-            f"Check the label column in extract_features.py."
+            f"Check the label column in extract_features.py.\n"
+            f"  normal rows  → label=0\n"
+            f"  evil twin    → label=1\n"
+            f"  deauth       → label=2  (wlan_fc.type=0, wlan_fc.subtype=12)"
         )
 
     # Class distribution
     dist = df[LABEL_COL].value_counts().sort_index()
-    label_names = {0: "normal", 1: "evil_twin"}
+    label_names = {0: "normal", 1: "evil_twin", 2: "deauth"}
     print(f"\n{CYN}[*] Class distribution:")
     for lbl, cnt in dist.items():
         name = label_names.get(lbl, str(lbl))
@@ -605,7 +623,8 @@ def main(args):
     )
 
     # ── 6. Model, loss, optimiser ─────────────────────────────────────────
-    model     = WirelessIDS(input_size=N_FEATURES, dropout_p=args.dropout).to(device)
+    model     = WirelessIDS(input_size=N_FEATURES, num_classes=N_CLASSES,
+                            dropout_p=args.dropout).to(device)
     criterion = nn.CrossEntropyLoss()    # Softmax + NLL in one numerically stable op
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     # ReduceLROnPlateau halves the learning rate when val loss stops improving
@@ -613,7 +632,8 @@ def main(args):
         optimizer, mode="min", patience=5, factor=0.5)
 
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"{CYN}[*] Model    : {N_FEATURES}→128→64→32→2  (timestamps excluded)")
+    print(f"{CYN}[*] Model    : {N_FEATURES}→128→64→32→{N_CLASSES}  "
+          f"(0=normal / 1=evil_twin / 2=deauth)")
     print(f"    Params   : {n_params:,}  |  Dropout: {args.dropout}  |  LR: {args.lr}")
 
     # ── 7. Training loop ──────────────────────────────────────────────────
@@ -694,15 +714,18 @@ def main(args):
     _, te_acc, te_preds, te_labels = eval_epoch(model, te_loader, criterion, device)
 
     # Map integer labels back to names for the report
-    class_names = [str(c) for c in le.classes_]
-    label_name_map = {0: "normal", 1: "evil_twin"}
+    label_name_map = {0: "normal", 1: "evil_twin", 2: "deauth"}
     class_names = [label_name_map.get(int(c), str(c)) for c in le.classes_]
 
     print(f"\n{CYN}{'─'*62}  Test Set Results")
     print(classification_report(te_labels, te_preds,
                                 target_names=class_names, digits=4))
     try:
-        print(f"  ROC-AUC : {roc_auc_score(te_labels, te_preds):.4f}")
+        # multi-class ROC-AUC requires one-vs-rest strategy
+        te_bin = label_binarize(te_labels, classes=list(range(N_CLASSES)))
+        pr_bin = label_binarize(te_preds,  classes=list(range(N_CLASSES)))
+        print(f"  ROC-AUC (OVR) : "
+              f"{roc_auc_score(te_bin, pr_bin, average='macro', multi_class='ovr'):.4f}")
     except Exception:
         pass
 
@@ -718,6 +741,7 @@ def main(args):
     print(f"{GRN}Next step  : python src/live_detection.py{RST}\n")
 
 
+
 # COMMAND-LINE ARGUMENTS
 def parse_args():
     p = argparse.ArgumentParser(
@@ -727,16 +751,16 @@ def parse_args():
         "--data_dir", default=DEFAULT_DATA_DIR,
         help="Folder containing Features.csv (default: data/processed/)"
     )
-    p.add_argument("--epochs",   type=int,   default=30,
-                   help="Max training epochs (default: 30)")
+    p.add_argument("--epochs",   type=int,   default=50,
+                   help="Max training epochs (default: 50)")
     p.add_argument("--lr",       type=float, default=0.0005,
                    help="Learning rate (default: 0.0005)")
     p.add_argument("--batch",    type=int,   default=64,
                    help="Batch size (default: 64)")
     p.add_argument("--dropout",  type=float, default=0.2,
                    help="Dropout probability (default: 0.2)")
-    p.add_argument("--patience", type=int,   default=30,
-                   help="Early stopping patience in epochs (default: 30)")
+    p.add_argument("--patience", type=int,   default=50,
+                   help="Early stopping patience in epochs (default: 50)")
     p.add_argument("--sample",   type=int,   default=0,
                    help="Subsample N rows for quick testing (0 = all data)")
     p.add_argument("--no-early-stop", dest="early_stop", action="store_false",
