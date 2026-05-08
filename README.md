@@ -17,6 +17,9 @@
   - [2. Extract Features](#2-extract-features)
   - [3. Train the Model](#3-train-the-model)
   - [4. Run Live Detection](#4-run-live-detection)
+- [Evil Twin Attack Setup Guide](#evil-twin-attack-setup-guide)
+- [Quick Deployment](#quick-deployment)
+- [Feature Set](#feature-set-awid3-style--evil-twin)
 - [Model Details](#model-details)
 - [Performance](#performance)
 - [Detection Logic](#detection-logic)
@@ -74,12 +77,26 @@ Traditional detection relies on static MAC allowlists, which are trivially bypas
                                            │  Live Dashboard        │
                                            │  localhost:5000        │
                                            └────────────────────────┘
-
-Lab Setup:
-  AP Phone   →  Hotspot: "FreeWiFi"  (Ch1, 2.4GHz) — Legitimate AP
-  ET Phone   →  Hotspot: "FreeWiFi"  (Ch1, 2.4GHz) — Evil Twin AP
-  Phone A/B  →  Clients connecting to FreeWiFi
 ```
+
+**Network Setup:**
+
+```
+U6+ OpenWrt Router (192.168.32.55)
+  ↓ br-lan (monitor mode)
+Linux Mint Server (192.168.32.10)
+  ├── data/raw/normal/*.pcap
+  ├── data/raw/attack/eviltwin/*.pcap
+  ├── data/raw/attack/deauth/*.pcap
+  ├── data/processed/Features.csv
+  └── data/models/wireless_ids.pt
+```
+
+**Lab Setup:**
+
+- **AP Phone** → Hotspot: "FreeWiFi" (Ch1, 2.4GHz) — Legitimate AP
+- **ET Phone** → Hotspot: "FreeWiFi" (Ch1, 2.4GHz) — Evil Twin AP
+- **Phone A/B** → Clients connecting to FreeWiFi
 
 ---
 
@@ -89,24 +106,37 @@ Lab Setup:
 ai-wids-complete/
 ├── data/
 │   ├── raw/
-│   │   ├── normal/              # Normal traffic PCAPs
-│   │   └── attack/              # Evil Twin PCAPs
-│   ├── processed/               # Features.csv (generated)
+│   │   ├── normal/                          # Normal traffic PCAPs
+│   │   ├── attack/
+│   │   │   ├── eviltwin/                    # Evil Twin attack PCAPs
+│   │   │   └── deauth/                      # Deauthentication attack PCAPs
+│   │   └── old/                             # Legacy captures
+│   ├── processed/
+│   │   └── Features.csv                     # Generated features dataset
 │   └── models/
-│       └── wireless_ids.pt      # Pre-trained model (included)
+│       └── wireless_ids.pt                  # Pre-trained model (included)
 ├── results/
-│   └── training_dashboard.png   # Training metrics plot
+│   ├── training_dashboard.png               # Training metrics visualization
+│   └── system_diagram.jpg
 ├── scripts/
-│   ├── normal_traffic.sh        # Capture normal traffic via OpenWrt
-│   ├── evil_twin.traffic.sh     # Capture Evil Twin attack traffic
-│   └── evil_twin_normal_traffic.sh
+│   ├── normal_traffic.sh                    # Capture normal traffic via OpenWrt
+│   ├── evil_twin.traffic.sh                 # Capture Evil Twin attack traffic
+│   ├── evil_twin_normal_traffic.sh
+│   ├── inject_deauth.sh                     # Deauth injection script
+│   └── normal_traffic.sh
 ├── src/
-│   ├── extract_features.py      # PCAP → AWID3-style CSV features
-│   ├── awid3_to_features.py     # AWID3 dataset converter (tshark-based)
-│   ├── train_model.py           # Train the DNN, save model + dashboard
-│   ├── live_detection.py        # Real-time inference + Flask dashboard
-│   └── utils/
-└── requirements.txt
+│   ├── extract_features.py                  # PCAP → AWID3-style CSV features
+│   ├── train_model.py                       # Train the DNN, save model
+│   ├── live_detection.py                    # Real-time inference + Flask dashboard
+│   ├── datacollect.py                       # Automated data collection
+│   ├── utils/
+│   │   └── __init__.py
+│   └── socket.io.min.js                     # WebSocket library
+├── notebooks/
+│   └── test.ipynb                           # Jupyter notebook for testing
+├── logs/                                    # Training/detection logs
+├── requirements.txt                         # Python dependencies
+└── README.md
 ```
 
 ---
@@ -170,6 +200,7 @@ chmod +x evil_twin.traffic.sh
 ```
 
 Before running, set up the lab:
+
 1. **AP Phone** — enable a hotspot named `FreeWiFi` on Channel 1 (2.4GHz)
 2. **ET Phone** — enable a hotspot named `FreeWiFi` on Channel 1 (2.4GHz)
 3. **Phone A/B** — connect to the `FreeWiFi` network and browse normally
@@ -200,6 +231,7 @@ python train_model.py
 ```
 
 This will:
+
 - Load `data/processed/Features.csv`
 - Balance the dataset via minority class upsampling
 - Normalise features with `StandardScaler`
@@ -228,6 +260,7 @@ python live_detection.py
 ```
 
 This will:
+
 1. Load the trained model from `data/models/wireless_ids.pt`
 2. Start the Flask dashboard at `http://localhost:5000`
 3. SSH into the OpenWrt router and begin streaming packets
@@ -248,49 +281,167 @@ Open `http://localhost:5000` in a browser to view live detections.
 [EVIL TWIN]  Conf: 0.964 | Deauth: 1 | Beacon: 0
 ```
 
-Stop the detector with `Ctrl+C`.
+---
+
+## Evil Twin Attack Setup Guide
+
+This section details how to configure your test lab to generate Evil Twin attack traffic.
+
+### Legitimate AP (AP Phone)
+
+- **Hotspot Name:** `FreeWiFi`
+- **Channel:** 1 (2.4GHz)
+- **Clients:** Phone A and/or Phone B connect and browse normally
+- **Keep running** during both capture windows
+
+### Evil Twin AP (ET Phone)
+
+- **Hotspot Name:** `FreeWiFi` (exactly the same SSID)
+- **Channel:** 1 (2.4GHz)
+- **Clients:** Phone A and/or Phone B will alternate between APs
+- **Enable just before Evil Twin capture window**
+
+### Capture Router (U6+ OpenWrt, 192.168.32.55)
+
+- **Monitor Interface:** `br-lan` in monitor mode
+- **tcpdump command:** Streams 802.11 beacon, data, and deauth frames
+- **SSH Server:** 192.168.32.10 (Linux Mint) receives packets via SSH tunnel
+- **Duration:** ~5-10 minutes per capture, depending on traffic volume
+
+### Traffic Pattern
+
+| Phase        | Legitimate AP | Evil Twin AP | Clients            | Capture                           |
+| ------------ | ------------- | ------------ | ------------------ | --------------------------------- |
+| 1. Normal    | ✓ On          | ✗ Off        | Browse             | `data/raw/normal/*.pcap`          |
+| 2. Evil Twin | ✓ On          | ✓ On         | Browse + Switching | `data/raw/attack/eviltwin/*.pcap` |
+
+The DNN learns to distinguish between:
+
+- **Normal:** Single AP beacon, normal client associations
+- **Evil Twin:** Conflicting beacons from multiple BSSIDs with same SSID
 
 ---
 
-## Model Details
+## Quick Deployment
+
+For rapid setup and testing, execute the full pipeline in sequence:
+
+```bash
+# 1. Setup OpenWrt router (one-time)
+ssh root@192.168.32.55 "opkg update && opkg install tcpdump"
+
+# 2. Setup lab devices
+# - AP Phone: Enable "FreeWiFi" hotspot on Channel 1 (2.4GHz)
+# - ET Phone: Enable "FreeWiFi" hotspot on Channel 1 (2.4GHz)
+# - Phone A/B: Connect to FreeWiFi and browse normally
+
+# 3. Collect traffic data
+cd scripts
+./normal_traffic.sh              # Follow prompts for 5-10 minutes
+./evil_twin.traffic.sh           # Follow prompts for 5-10 minutes
+
+# 4. Extract features and train model
+cd ../src
+python extract_features.py \
+  --normal-dir ../data/raw/normal \
+  --evil-twin-dir ../data/raw/attack/eviltwin \
+  --deauth-dir ../data/raw/attack/deauth \
+  --output ../data/processed/Features.csv \
+  --target-ssid FreeWiFi
+
+python train_model.py
+
+# 5. Run live detection
+python live_detection.py
+# Open http://localhost:5000 in browser
+```
+
+---
+
+## Feature Set (AWID3-Style + Evil Twin)
+
+The `extract_features.py` script generates 35+ features per packet from PCAP files:
+
+**802.11 Frame Control Features:**
+
+- `wlan.fc.type` — Frame type (management/control/data)
+- `wlan.fc.subtype` — Subtype (beacon/deauth/auth/data)
+- `wlan.fc.ds` — Direction (to/from DS)
+- `wlan.fc.protected` — Encryption flag
+- `wlan.fc.moredata` — More data flag
+- `wlan.fc.frag` — Fragmentation flag
+- `wlan.fc.retry` — Retry flag
+- `wlan.fc.pwrmgt` — Power management flag
+
+**Address & Sequencing:**
+
+- `wlan.sa` — Source address (MAC)
+- `wlan.ta` — Transmitter address
+- `wlan.ra` — Receiver address
+- `wlan.da` — Destination address
+- `wlan.seq` — Sequence number
+- `wlan.da_is_broadcast` — Broadcast destination
+
+**Radio/Physical Layer:**
+
+- `radiotap.length` — Radiotap header length
+- `radiotap.datarate` — Transmission rate (Mbps)
+- `radiotap.mactime` — Hardware timestamp
+- `wlan_radio.signal_dbm` — Signal strength (dBm)
+- `radiotap.channel.flags.ofdm` — OFDM modulation
+- `radiotap.channel.flags.cck` — CCK modulation
+
+**Attack-Specific Features:**
+
+- `wlan.reason` — Deauth/disassoc reason code
+- `frame.len` — Frame length
+- `ssid_conflict_flag` — Multiple BSSIDs with same SSID
+- `deauth_rate` — Deauth frames per time window
+- `beacon_rate` — Beacon frames per time window
+
+**Label:**
+
+- `label` — 0: Normal, 1: Evil Twin, 2: Deauthentication (if present)
+
+---
 
 The neural network is a 4-layer feedforward classifier built with PyTorch:
 
-| Layer | Neurons | Activation |
-|-------|---------|------------|
-| Input | 35+ features | — |
-| Hidden 1 | 128 | ReLU + Dropout(0.3) |
-| Hidden 2 | 64 | ReLU + Dropout(0.3) |
-| Hidden 3 | 32 | ReLU |
-| Output | 2 (Normal / Evil Twin) | Softmax |
+| Layer    | Neurons                | Activation          |
+| -------- | ---------------------- | ------------------- |
+| Input    | 35+ features           | —                   |
+| Hidden 1 | 128                    | ReLU + Dropout(0.3) |
+| Hidden 2 | 64                     | ReLU + Dropout(0.3) |
+| Hidden 3 | 32                     | ReLU                |
+| Output   | 2 (Normal / Evil Twin) | Softmax             |
 
 **Training configuration:**
 
-| Parameter | Value |
-|-----------|-------|
-| Epochs | 50 |
-| Batch size | 64 |
-| Optimizer | Adam (lr=0.001) |
-| Loss function | Cross Entropy |
-| Train/test split | 80% / 20% |
-| Class balancing | Upsampling (minority class) |
-| Feature scaling | StandardScaler |
-| Regularisation | Dropout 30% |
-| Training time | ~5 minutes |
-| Total parameters | ~17,000 |
+| Parameter        | Value                       |
+| ---------------- | --------------------------- |
+| Epochs           | 50                          |
+| Batch size       | 64                          |
+| Optimizer        | Adam (lr=0.001)             |
+| Loss function    | Cross Entropy               |
+| Train/test split | 80% / 20%                   |
+| Class balancing  | Upsampling (minority class) |
+| Feature scaling  | StandardScaler              |
+| Regularisation   | Dropout 30%                 |
+| Training time    | ~5 minutes                  |
+| Total parameters | ~17,000                     |
 
 ---
 
 ## Performance
 
-| Metric | Value |
-|--------|-------|
-| Overall Accuracy | **97.5%** |
-| Evil Twin Precision | **98%** |
-| Evil Twin Recall | **97%** |
-| F1 Score (Evil Twin) | **97.5%** |
-| Per-Packet Detection Speed | **< 50 ms** |
-| Training Time | **~5 minutes** |
+| Metric                     | Value          |
+| -------------------------- | -------------- |
+| Overall Accuracy           | **97.5%**      |
+| Evil Twin Precision        | **98%**        |
+| Evil Twin Recall           | **97%**        |
+| F1 Score (Evil Twin)       | **97.5%**      |
+| Per-Packet Detection Speed | **< 50 ms**    |
+| Training Time              | **~5 minutes** |
 
 ---
 
@@ -317,15 +468,15 @@ Live detection applies three layers in priority order:
 
 ## Hardware Requirements
 
-| Component | Specification |
-|-----------|--------------|
-| Capture Router | Ubiquiti UniFi U6+ running OpenWrt |
+| Component         | Specification                                           |
+| ----------------- | ------------------------------------------------------- |
+| Capture Router    | Ubiquiti UniFi U6+ running OpenWrt                      |
 | Router Interfaces | `phy0-mon0` (2.4GHz), `phy1-mon0` (5GHz) — monitor mode |
-| Capture Server | Linux Mint / Ubuntu |
-| Router IP | 192.168.32.55 (configurable in `live_detection.py`) |
-| SSH Access | Passwordless SSH from server to router |
-| Python | 3.9+ |
-| RAM | 2GB minimum for training |
+| Capture Server    | Linux Mint / Ubuntu                                     |
+| Router IP         | 192.168.32.55 (configurable in `live_detection.py`)     |
+| SSH Access        | Passwordless SSH from server to router                  |
+| Python            | 3.9+                                                    |
+| RAM               | 2GB minimum for training                                |
 
 ---
 
@@ -350,20 +501,20 @@ Live detection applies three layers in priority order:
 
 ## Dependencies
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| torch | 2.1.0 | Neural network training and inference |
-| numpy | 1.24.3 | Numerical computation |
-| pandas | 2.0.3 | Data loading and manipulation |
-| scikit-learn | 1.3.0 | Scaling, splitting, metrics |
-| scapy | 2.5.0 | 802.11 packet parsing |
-| pyshark | 0.6 | AWID3-style feature extraction via tshark |
-| flask | 3.0.0 | Web dashboard server |
-| flask-socketio | 5.6.1 | Real-time WebSocket alerts |
-| matplotlib | 3.7.2 | Training visualisation |
-| seaborn | 0.12.2 | Confusion matrix plots |
-| tqdm | 4.67.3 | Training progress bars |
-| colorama | 0.4.6 | Coloured terminal output |
+| Package        | Version | Purpose                                   |
+| -------------- | ------- | ----------------------------------------- |
+| torch          | 2.1.0   | Neural network training and inference     |
+| numpy          | 1.24.3  | Numerical computation                     |
+| pandas         | 2.0.3   | Data loading and manipulation             |
+| scikit-learn   | 1.3.0   | Scaling, splitting, metrics               |
+| scapy          | 2.5.0   | 802.11 packet parsing                     |
+| pyshark        | 0.6     | AWID3-style feature extraction via tshark |
+| flask          | 3.0.0   | Web dashboard server                      |
+| flask-socketio | 5.6.1   | Real-time WebSocket alerts                |
+| matplotlib     | 3.7.2   | Training visualisation                    |
+| seaborn        | 0.12.2  | Confusion matrix plots                    |
+| tqdm           | 4.67.3  | Training progress bars                    |
+| colorama       | 0.4.6   | Coloured terminal output                  |
 
 Install all with:
 
@@ -382,4 +533,4 @@ pip install -r requirements.txt
 
 ---
 
-*MSc Project — Team 21*
+_MSc Project — Team 21_
