@@ -1,0 +1,4 @@
+SET TP-LINK IN MONITOR MODE
+============================
+
+sudo airmon-ng start wlx18a6f7110f62
