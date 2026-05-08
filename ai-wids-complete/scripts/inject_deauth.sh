@@ -1,19 +1,4 @@
 #!/usr/bin/env bash
-# =============================================================================
-#  AI-WIDS — Standalone Deauth Injector  (v3 — targeted, no channel conflict)
-#  Device  : TP-Link TL-WN722N (AR9271) on Kali Linux
-#  Purpose : Inject deauth frames ONLY at clients of the trusted FreeWiFi AP.
-#            Run this while live.py is running — dashboard detects the attack.
-#
-#  Usage   : bash inject_deauth.sh
-#
-#  REQUIREMENTS (one-time setup):
-#    sudo airmon-ng check kill
-#    sudo airmon-ng start wlx18a6f7110f62   # creates wlan0mon
-#    sudo setcap cap_net_raw,cap_net_admin+eip $(which airodump-ng)
-#    sudo setcap cap_net_raw,cap_net_admin+eip $(which aireplay-ng)
-#    sudo setcap cap_net_raw,cap_net_admin+eip $(which iw)
-# =============================================================================
 
 set -euo pipefail
 
@@ -38,11 +23,9 @@ STOPPING=0          # set to 1 by cleanup trap so inject loop can exit cleanly
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 banner() {
   echo -e "${RED}"
-  echo "  ╔══════════════════════════════════════════════╗"
-  echo "  ║   AI-WIDS  —  Deauth Injector  v3           ║"
-  echo "  ║   TL-WN722N (AR9271)  │  FreeWiFi target    ║"
-  echo "  ║   Targeted: clients of TRUSTED AP only       ║"
-  echo "  ╚══════════════════════════════════════════════╝"
+  echo "AI-WIDS  —  Deauth Injector"
+  echo "TL-WN722N (AR9271)  │  FreeWiFi target"
+  echo "Targeted: clients of TRUSTED AP only"
   echo -e "${NC}"
 }
 
@@ -103,9 +86,6 @@ scan_ap() {
     exit 1
   fi
 
-  # Collect all lines matching TARGET_SSID (AP section, before the station section)
-  # AP CSV columns: BSSID,First seen,Last seen,channel,Speed,Privacy,...,ESSID
-  # Station section starts with "Station MAC"
   mapfile -t ap_lines < <(
     awk -F',' '
       /^Station MAC/ { exit }
@@ -183,8 +163,6 @@ scan_clients() {
     return
   fi
 
-  # Station section: "Station MAC, First time seen, Last time seen, Power, # packets, BSSID, ..."
-  # We want rows where BSSID matches AP_BSSID
   mapfile -t CLIENT_MACS < <(
     awk -F',' '
       /^Station MAC/ { in_stations=1; next }

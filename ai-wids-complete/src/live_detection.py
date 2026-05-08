@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-AI-WIDS Live Detection Dashboard - v2.3 (DUAL-BAND + 3-CLASS AI MODEL)
-Loads wireless_ids.pt and runs real-time inference on beacons and deauth frames.
-
-Model classes:
-    0 = normal / trusted AP
-    1 = evil twin attack
-    2 = deauth attack
-"""
 import threading
 import subprocess
 import time
@@ -41,14 +32,9 @@ DEAUTH_MIN_RATE     = 1.0   # minimum rate to UPDATE an existing attacker entry 
                             # stray frames below this rate are ignored entirely
 DEAUTH_AI_EMA       = 0.2   # EMA smoothing for deauth AI confidence (lower = smoother)
 
-# Set this to your TRUSTED AP's BSSID — any other device broadcasting TARGET_SSID
-# is immediately flagged as Evil Twin (regardless of AI score).
-# Leave empty to rely on AI-only + duplicate-SSID heuristic.
+
 TRUSTED_BSSIDS: set = {"fa:c6:f7:9e:cf:0c"}   # ← your phone hotspot MAC (always lowercase)
 
-# --- AI MODEL DEFINITION (must match modeltrain.py WirelessIDS exactly) ---
-# Architecture: input → 128 → 64 → 32 → num_classes
-# num_classes is inferred from the checkpoint at load time (2 for old models, 3 for new).
 class WirelessIDS(nn.Module):
     def __init__(self, input_size, num_classes=3):
         super().__init__()
@@ -682,10 +668,6 @@ def load_model():
 
 
 def extract_features(pkt):
-    """
-    Extract the 16 features produced by featureextract.py.
-    Field names match FEATURE_COLS in modeltrain.py exactly.
-    """
     wlan_fc_type      = int(getattr(pkt, 'type',    0))
     wlan_fc_subtype   = int(getattr(pkt, 'subtype', 0))
     wlan_fc_ds = wlan_fc_protected = wlan_fc_moredata = 0
@@ -736,12 +718,6 @@ def extract_features(pkt):
 
 
 def run_inference(pkt):
-    """Run the model on one packet.
-
-    Returns:
-        label      : int   — 0=normal, 1=evil_twin, 2=deauth
-        confidence : float — softmax probability of the predicted class (0–100)
-    """
     if state.model is None:
         return 0, 0.0
     feats    = extract_features(pkt)
@@ -793,8 +769,6 @@ def channel_hopper():
             time.sleep(HOP_INTERVAL)
 
 def get_channel(pkt):
-    """Extract the channel number from the beacon's DS Parameter Set IE (ID=3),
-    falling back to the Radiotap channel frequency if the IE is absent."""
     elt = pkt.getlayer(Dot11Elt)
     while elt:
         if elt.ID == 3 and elt.info:
@@ -874,8 +848,6 @@ def sniffer_worker(iface, band_label):
                     if other_targets:
                         evil_prob = max(evil_prob, 0.85)
 
-                # Hysteresis: flip TO evil only above EVIL_THRESHOLD,
-                # flip BACK to trusted only below SAFE_THRESHOLD.
                 if was_evil_last:
                     is_evil = is_target and (evil_prob >= SAFE_THRESHOLD)
                 else:
@@ -884,10 +856,6 @@ def sniffer_worker(iface, band_label):
                 # Alert on NEW BSSID appearance or status change
                 prev_is_evil = state.mac_registry[bssid].get('is_evil', None) if not is_new else None
                 status_changed = (not is_new) and (prev_is_evil != is_evil)
-
-                # Show raw model confidence (softmax probability of the predicted class).
-                # This varies naturally (50-95%) and reflects actual AI certainty,
-                # not the derived evil_prob which drifts to 0 or 1 over time.
                 display_conf = round(confidence)
 
                 state.mac_registry[bssid] = {
@@ -928,9 +896,6 @@ def deauth_sniffer_worker(iface, band_label):
             ch   = get_channel(pkt)
             now  = time.time()
 
-            # AI inference on the deauth frame.
-            # Only meaningful with the 3-class model (label=2 = deauth).
-            # Cap at 99 so the display never freezes on "100%".
             ai_label, ai_conf = run_inference(pkt)
             deauth_ai_conf = min(round(ai_conf), 99) if ai_label == 2 else 0
 
@@ -944,11 +909,7 @@ def deauth_sniffer_worker(iface, band_label):
                 ]
                 rate = len(state.deauth_registry[src]) / DEAUTH_WINDOW
 
-                # Two-tier rate gating:
-                #   NEW entry:      requires rate >= DEAUTH_RATE_ALERT (3/s)
-                #                   — rules out brief bursts from normal AP management
-                #   UPDATE entry:   requires rate >= DEAUTH_MIN_RATE (1/s)
-                #                   — keeps existing confirmed entry alive
+                # Two-tier rate gating: track all sources above ALERT threshold, but only mark active attackers above MIN_RATE.
                 prev = state.deauth_attackers.get(src)
                 already_tracked = prev is not None
 

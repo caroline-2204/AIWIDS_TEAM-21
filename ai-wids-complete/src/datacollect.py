@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-AI-WIDS Traffic Collection - v2.4 (DUAL-BAND + SELF-CONTAINED DEAUTH)
-Captures FreeWiFi beacon traffic on both 2.4 GHz and 5 GHz,
-filters to FreeWiFi only, and saves each band to its own PCAP file.
-Deauth mode is fully self-contained: checks device connections,
-locates the AP, injects deauth frames locally, and captures on OpenWrt.
-"""
 import threading
 import subprocess
 import tempfile
@@ -17,9 +10,7 @@ from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-# ---------------------------------------------------------------------------
 # CONFIGURATION
-# ---------------------------------------------------------------------------
 OPENWRT_IP       = "192.168.32.55"
 TARGET_SSID      = "FreeWiFi"
 IFACE_24         = "phy0-mon0"
@@ -35,9 +26,7 @@ OUTPUT_DIR_DEAUTH = "../data/raw/attack/deauth"
 hopper_paused = threading.Event()
 
 
-# ---------------------------------------------------------------------------
 # HARDWARE SETUP  (OpenWrt monitor interfaces)
-# ---------------------------------------------------------------------------
 def setup_hardware():
     print(f"{Fore.CYAN}[*] Configuring Dual Monitoring (phy0 & phy1)...{Style.RESET_ALL}")
     cmd = f"""
@@ -54,9 +43,7 @@ def setup_hardware():
     subprocess.run(['ssh', f'root@{OPENWRT_IP}', cmd], check=True, stderr=subprocess.DEVNULL)
 
 
-# ---------------------------------------------------------------------------
 # CHANNEL HOPPER  (normal / evil-twin modes only)
-# ---------------------------------------------------------------------------
 def channel_hopper():
     ch_24 = [1, 6, 11]
     ch_50 = [36, 44, 149, 157]
@@ -78,9 +65,7 @@ def channel_hopper():
             time.sleep(4)
 
 
-# ---------------------------------------------------------------------------
 # FREEWIFI DETECTION  (normal / evil-twin pre-scan)
-# ---------------------------------------------------------------------------
 def detect_freewifi_on_iface(iface, band_label, timeout=30):
     print(f"{Fore.CYAN}[*] Pre-scan: looking for '{TARGET_SSID}' on {band_label} ({iface})...{Style.RESET_ALL}")
     cmd = ['ssh', f'root@{OPENWRT_IP}',
@@ -137,9 +122,7 @@ def detect_freewifi():
     return detected_any
 
 
-# ---------------------------------------------------------------------------
 # DEAUTH — device connection check
-# ---------------------------------------------------------------------------
 def check_deauth_devices():
     """Verify wlan0mon (TL-WN722N) and OpenWrt phy0-mon0 are ready."""
     ok = True
@@ -180,9 +163,7 @@ def check_deauth_devices():
     return ok
 
 
-# ---------------------------------------------------------------------------
 # DEAUTH — locate FreeWiFi AP via local airodump-ng scan
-# ---------------------------------------------------------------------------
 def find_ap_bssid(timeout=20):
     """
     Scan wlan0mon for FreeWiFi across all channels.
@@ -263,9 +244,7 @@ def find_ap_bssid(timeout=20):
         return bssid, channel
 
 
-# ---------------------------------------------------------------------------
 # DEAUTH — continuous injector with dynamic channel tracking
-# ---------------------------------------------------------------------------
 def deauth_injector_worker(bssid, duration, stop_event):
     """
     Run aireplay-ng in continuous mode (-0 0) for full throughput.
@@ -342,9 +321,7 @@ def deauth_injector_worker(bssid, duration, stop_event):
         track_proc.wait()
 
 
-# ---------------------------------------------------------------------------
 # SNIFFER — FreeWiFi beacons, saves to PCAP
-# ---------------------------------------------------------------------------
 def sniffer_worker(iface, band_label, duration, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -384,9 +361,7 @@ def sniffer_worker(iface, band_label, duration, output_dir):
     print(f"{Fore.GREEN}[+] [{band_label}] Done — {pkt_count} packets  |  {pcap_path}  ({size_kb} KB){Style.RESET_ALL}")
 
 
-# ---------------------------------------------------------------------------
 # DEAUTH SNIFFER — captures deauth frames on OpenWrt, saves to PCAP
-# ---------------------------------------------------------------------------
 def deauth_sniffer_worker(iface, band_label, duration, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -420,9 +395,7 @@ def deauth_sniffer_worker(iface, band_label, duration, output_dir):
     print(f"{Fore.RED}[+] [{band_label}] Done — {pkt_count} deauth frames  |  {pcap_path}  ({size_kb} KB){Style.RESET_ALL}")
 
 
-# ---------------------------------------------------------------------------
 # ENTRY POINT
-# ---------------------------------------------------------------------------
 if __name__ == '__main__':
     setup_hardware()
 
@@ -465,9 +438,7 @@ if __name__ == '__main__':
             print(f"{Fore.RED}  Invalid — using 300s.{Style.RESET_ALL}")
             duration = 300
 
-        # -----------------------------------------------------------------------
         # DEAUTH MODE — self-contained: check devices → find AP → inject + capture
-        # -----------------------------------------------------------------------
         if ctype == "3":
             hopper_paused.set()
 
@@ -522,9 +493,7 @@ if __name__ == '__main__':
             t50.join()
             hopper_paused.clear()
 
-        # -----------------------------------------------------------------------
         # NORMAL / EVIL-TWIN MODE
-        # -----------------------------------------------------------------------
         else:
             if not detect_freewifi():
                 print(f"{Fore.RED}[!] '{TARGET_SSID}' not detected on any band. Aborting.{Style.RESET_ALL}")
