@@ -2,8 +2,6 @@
 
 ## Complete Production Implementation
 
-**Matching projecttask.docx specifications exactly**
-
 ## Network Architecture
 
 ```
@@ -11,20 +9,16 @@ U6+ OpenWrt Router (192.168.32.55)
   ↓ br-lan (monitor mode)
 Linux Mint Server (192.168.32.10)
   ├── data/raw/normal/*.pcap
-  ├── data/raw/attack/*.pcap
-  ├── data/processed/Features.csv (AWID3-style)
+  ├── data/raw/attack/eviltwin/*.pcap
+  ├── data/raw/attack/deauth/*.pcap
+  ├── data/processed/Features.csv
   └── data/model/wireless_ids.pt
-
-AP Phone (FreeWiFi, Ch1 2.4GHz)
-  ↓
-Phone A/B (Clients)
-
-ET Phone (FreeWiFi Evil Twin, Ch1 2.4GHz)
-  ↓
-Phone A/B (Clients)
 ```
+### System Diagram
+![system diagram](results/system_diagram.jpg)
 
-## 📋 Exact File Structure
+
+## 📋 Exact File Structure 
 
 ```
 ai-wids-eviltwin/
@@ -43,7 +37,7 @@ ai-wids-eviltwin/
 └── README.md                  # This file
 ```
 
-## 🚀 Deployment Workflow (Exact Match)
+## 🚀 Deployment Workflow
 
 ### 1. Data Collection
 
@@ -54,7 +48,7 @@ ai-wids-eviltwin/
 
 **Outputs:**
 
-```
+```bash
 data/raw/normal/*.pcap         # Normal captures
 data/raw/attack/*.pcap         # Evil Twin captures
 ```
@@ -62,19 +56,24 @@ data/raw/attack/*.pcap         # Evil Twin captures
 ### 2. Feature Extraction
 
 ```bash
-python extract_features.py <input_file> --filter <filter_string> --label evil_twin
+python src/extract_features.py \
+  --normal-dir data/raw/normal \
+  --evil-twin-dir data/raw/attack/eviltwin \
+  --deauth-dir data/raw/attack/deauth \
+  --output data/processed/Features.csv \
+  --target-ssid FreeWiFi
 ```
 
 **Output:**
 
 ```
-data/processed/Features.csv 
+data/processed/Features.csv
 ```
 
 ### 3. Model Training
 
 ```bash
-./train_model.py               # Deep NN training
+python train_model.py               # Deep NN training
 ```
 
 **Output:**
@@ -86,7 +85,7 @@ data/model/wireless_ids.pt     # Trained model
 ### 4. Live Detection
 
 ```bash
-./live_detection.py            # Real-time detection
+python live_detection.py            # Real-time detection
 ```
 
 **Loads:** `data/model/wireless_ids.pt`
@@ -120,18 +119,15 @@ tcpdump → Server 192.168.32.10
 
 ## 🔧 Features (AWID3-style + Evil Twin)
 
-**35+ Features Extracted:**
+**23 Features Extracted:**
 
 ```
-frame_length, frame_type, frame_subtype
-is_mgmt, is_beacon, is_deauth
-deauth_rate, beacon_rate, ssid_conflict
-protocol_type, service, flag_number
-src_bytes, dst_bytes, src_port, dst_port
-count, srv_count, serror_rate, rerror_rate
-same_srv_rate, diff_srv_rate, dst_host_count
-... (full AWID3 feature set)
-label (normal/evil_twin)
+wlan.fc.type, wlan.fc.subtype, wlan.sa, wlan.ta, wlan.ra, wlan.seq,
+wlan.fc.ds, wlan.fc.protected, wlan.fc.moredata, wlan.fc.frag, wlan.fc.retry, wlan.fc.pwrmgt,
+radiotap.length, radiotap.datarate, radiotap.timestamp.ts, radiotap.mactime,
+wlan_radio.signal_dbm, radiotap.channel.flags.ofdm, radiotap.channel.flags.cck,
+frame.len, wlan.reason, wlan.da_is_broadcast
+label (normal-0/evil_twin-1/deauth-2)
 ```
 
 ---
@@ -158,41 +154,23 @@ Model saved: data/model/wireless_ids.pt
 ## 🛠 Quick Deployment
 
 ```bash
-# 1. Extract package
-tar -xzf ai-wids-eviltwin-complete.tar.gz
-cd ai-wids-eviltwin
-
-# 2. Setup U6+ OpenWrt (192.168.32.55)
+# 1. Setup U6+ OpenWrt (192.168.32.55)
 ssh root@192.168.32.55 "opkg update && opkg install tcpdump"
 
-# 3. Setup phones
+# 2. Setup phones
 # AP Phone: FreeWiFi hotspot (Ch1)
 # ET Phone: FreeWiFi hotspot (Ch1)
 # Phone A/B: Connect to FreeWiFi
 
-# 4. Collect data
+# 3. Collect data
 ./normal_traffic.sh
 ./evil_twin.traffic.sh
 
-# 5. Train & detect
-./extract_features.py
-./train_model.py
-./live_detection.py
+# 4. Train & detect
+python src/extract_features.py --normal-dir data/raw/normal --evil-twin-dir data/raw/attack/eviltwin --deauth-dir data/raw/attack/deauth --output data/processed/Features.csv --target-ssid FreeWiFi
+python src/train_model.py
+python src/live_detection.py
 ```
 
 ---
 
-## 📈 Performance Metrics
-
-| Metric                  | Value                   |
-| ----------------------- | ----------------------- |
-| **Features**            | 35+ (AWID3 + Evil Twin) |
-| **Accuracy**            | 97.5%                   |
-| **Evil Twin Precision** | 98%                     |
-| **Evil Twin Recall**    | 97%                     |
-| **Detection Speed**     | <50ms/packet            |
-| **Training Time**       | 5 minutes               |
-
-**Status:** ✅ **Production Ready - Matches projecttask.docx exactly**
-
-**Download the complete package above!** 🚀
