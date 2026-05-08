@@ -353,28 +353,6 @@ The neural network is a 4-layer feedforward classifier built with PyTorch, train
 
 ---
 
-## Performance
-
-| Metric                         | Value          |
-| ------------------------------ | -------------- |
-| **Overall Accuracy**           | **97.5%**      |
-| **Evil Twin Detection**        | —              |
-| Precision                      | 98%            |
-| Recall                         | 97%            |
-| F1 Score                       | 97.5%          |
-| **Normal Traffic Detection**   | —              |
-| Precision                      | 96%            |
-| Recall                         | 98%            |
-| F1 Score                       | 97%            |
-| **Deauthentication Detection** | —              |
-| Precision                      | 95%            |
-| Recall                         | 96%            |
-| F1 Score                       | 95.5%          |
-| **Per-Packet Detection Speed** | **< 50 ms**    |
-| **Training Time**              | **~5 minutes** |
-| **Model Size**                 | **~180 KB**    |
-
----
 
 ## Detection Logic
 
