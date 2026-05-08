@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI-WIDS Traffic Collection - (DUAL-BAND + SELF-CONTAINED DEAUTH)
+AI-WIDS Traffic Collection - v2.4 (DUAL-BAND + SELF-CONTAINED DEAUTH)
 Captures FreeWiFi beacon traffic on both 2.4 GHz and 5 GHz,
 filters to FreeWiFi only, and saves each band to its own PCAP file.
 Deauth mode is fully self-contained: checks device connections,
@@ -560,3 +560,4 @@ if __name__ == '__main__':
             break
 
     print(f"\n{Fore.GREEN}[*] Done. Files saved to {OUTPUT_DIR_NOR}, {OUTPUT_DIR_ATT}, and/or {OUTPUT_DIR_DEAUTH}{Style.RESET_ALL}")
+
