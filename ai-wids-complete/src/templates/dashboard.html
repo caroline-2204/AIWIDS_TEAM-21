@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI-WIDS | NOC Dashboard - AUTO-REFRESH</title>
+    <script src="/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --bg-primary: #0a0e27;
+            --bg-secondary: #141829;
+            --bg-card: #1a1f3a;
+            --border: #2d3561;
+            --text-primary: #e4e8ff;
+            --text-secondary: #8b92c4;
+            --blue: #3b82f6;
+            --cyan: #06b6d4;
+            --red: #ef4444;
+            --orange: #f97316;
+            --green: #10b981;
+            --yellow: #fbbf24;
+            --purple: #8b5cf6;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 15px;
+            font-size: 13px;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 12px;
+            background: var(--bg-card);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, var(--blue), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            background: var(--green);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .update-indicator {
+            width: 8px;
+            height: 8px;
+            background: var(--cyan);
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 8px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .update-indicator.flash {
+            animation: flashUpdate 0.5s;
+        }
+        
+        @keyframes flashUpdate {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+        }
+        
+        .stat-card.blue::before { background: var(--blue); }
+        .stat-card.cyan::before { background: var(--cyan); }
+        .stat-card.red::before { background: var(--red); }
+        .stat-card.green::before { background: var(--green); }
+        .stat-card.orange::before { background: var(--orange); }
+        .stat-card.purple::before { background: var(--purple); }
+        
+        .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+        
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+        
+        .stat-card.blue .stat-value { color: var(--blue); }
+        .stat-card.cyan .stat-value { color: var(--cyan); }
+        .stat-card.red .stat-value { color: var(--red); }
+        .stat-card.green .stat-value { color: var(--green); }
+        .stat-card.orange .stat-value { color: var(--orange); }
+        .stat-card.purple .stat-value { color: var(--purple); }
+        
+        .main-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 15px;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+        }
+        
+        .card-header {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        thead th {
+            text-align: left;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            padding: 8px;
+            border-bottom: 2px solid var(--border);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        
+        tbody td {
+            padding: 10px 8px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+        
+        tbody tr {
+            transition: all 0.3s ease;
+        }
+        
+        tbody tr:hover {
+            background: rgba(59, 130, 246, 0.1) !important;
+        }
+        
+        tbody tr.type-trusted {
+            background: rgba(16, 185, 129, 0.05) !important;
+            border-left: 3px solid var(--green) !important;
+        }
+        
+        tbody tr.type-evil-twin {
+            background: rgba(239, 68, 68, 0.25) !important;
+            border-left: 4px solid var(--red) !important;
+            animation: alertPulse 2s infinite !important;
+            box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.15) !important;
+        }
+        
+        tbody tr.type-unmanaged {
+            background: rgba(251, 191, 36, 0.05) !important;
+            border-left: 3px solid var(--orange) !important;
+        }
+
+        tbody tr.type-deauth {
+            background: rgba(239, 68, 68, 0.20) !important;
+            border-left: 4px solid #ff0000 !important;
+            animation: alertPulse 1s infinite !important;
+        }
+
+        tbody tr.type-deauth-ended {
+            background: rgba(239, 68, 68, 0.06) !important;
+            border-left: 4px solid #aa2222 !important;
+        }
+
+        .badge.deauth {
+            background: rgba(239, 68, 68, 0.3);
+            color: #ff4444;
+            border: 1px solid #ff0000;
+            animation: alertPulse 1s infinite;
+        }
+
+        .badge.deauth-ended {
+            background: rgba(239, 68, 68, 0.1);
+            color: #aa4444;
+            border: 1px solid #aa2222;
+        }
+        
+        tbody tr.row-changed {
+            animation: rowFlash 0.5s;
+        }
+        
+        @keyframes rowFlash {
+            0% { transform: translateX(-5px); }
+            50% { transform: translateX(5px); }
+            100% { transform: translateX(0); }
+        }
+        
+        @keyframes alertPulse {
+            0%, 100% { 
+                box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.15), 0 0 0 rgba(239, 68, 68, 0);
+            }
+            50% { 
+                box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.15), 0 0 15px rgba(239, 68, 68, 0.4);
+            }
+        }
+        
+        .badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: inline-block;
+        }
+        
+        .badge.trusted {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--green);
+            border: 1px solid var(--green);
+        }
+        
+        .badge.evil-twin {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--red);
+            border: 1px solid var(--red);
+        }
+        
+        .badge.unmanaged {
+            background: rgba(251, 191, 36, 0.2);
+            color: var(--orange);
+            border: 1px solid var(--orange);
+        }
+        
+        .confidence-bar {
+            width: 60px;
+            height: 6px;
+            background: var(--bg-secondary);
+            border-radius: 3px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            transition: width 0.3s;
+        }
+        
+        .confidence-fill.high { background: var(--green); }
+        .confidence-fill.medium { background: var(--yellow); }
+        .confidence-fill.low { background: var(--red); }
+        
+        #alert-log {
+            height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+            background: var(--bg-secondary);
+            padding: 10px;
+            border-radius: 6px;
+        }
+        
+        .alert-item {
+            padding: 8px;
+            margin-bottom: 6px;
+            border-radius: 4px;
+            border-left: 3px solid;
+            animation: dropDown 0.3s;
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(-20px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        .alert-item.evil-twin {
+            background: rgba(239, 68, 68, 0.1);
+            border-left-color: var(--red);
+        }
+        
+        .alert-item.trusted {
+            background: rgba(16, 185, 129, 0.1);
+            border-left-color: var(--green);
+        }
+        
+        .alert-item.unmanaged {
+            background: rgba(251, 191, 36, 0.1);
+            border-left-color: var(--orange);
+        }
+        
+        .alert-time {
+            color: var(--text-secondary);
+            font-size: 0.7rem;
+        }
+        
+        .mac-address {
+            font-family: 'Courier New', monospace;
+            color: var(--cyan);
+            font-size: 0.8rem;
+        }
+        
+        .channel-badge {
+            background: rgba(139, 92, 246, 0.2);
+            color: var(--purple);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>
+            <span class="status-indicator"></span>
+            🛡️AI Wireless Intrusion Detection System (AI-WIDS) NOC Dashboard
+            <span class="update-indicator" id="update-flash"></span>
+        </h1>
+        <div style="color: var(--text-secondary); font-size: 0.85rem;">
+            <span id="timestamp">--:--:--</span> | 
+            Target: <span style="color: var(--cyan)" id="target-ssid">Loading...</span>
+        </div>
+    </div>
+    
+    <div class="dashboard">
+        <div class="stat-card blue">
+            <div class="stat-label">Total Packets</div>
+            <div class="stat-value" id="total-pkts">0</div>
+        </div>
+        
+        <div class="stat-card red">
+            <div class="stat-label">Threats Detected</div>
+            <div class="stat-value" id="threat-count">0</div>
+        </div>
+        
+        <div class="stat-card cyan">
+            <div class="stat-label">2.4 GHz Devices</div>
+            <div class="stat-value" id="band-24">0</div>
+        </div>
+        
+        <div class="stat-card purple">
+            <div class="stat-label">5 GHz Devices</div>
+            <div class="stat-value" id="band-5">0</div>
+        </div>
+        
+        <div class="stat-card green">
+            <div class="stat-label">Trusted APs</div>
+            <div class="stat-value" id="trusted-count">0</div>
+        </div>
+        
+        <div class="stat-card orange">
+            <div class="stat-label">Active Channels</div>
+            <div class="stat-value" id="channel-count">0</div>
+        </div>
+        <div class="stat-card red">
+            <div class="stat-label">Deauth Frames</div>
+            <div class="stat-value" id="deauth-total">0</div>
+        </div>
+        <div class="stat-card red">
+            <div class="stat-label">Deauth Attackers</div>
+            <div class="stat-value" id="deauth-active">0</div>
+        </div>
+    </div>
+    
+    <div class="main-grid">
+        <div class="card">
+            <div class="card-header">🌐 Network Monitor <small style="color: var(--cyan); font-weight: normal;">(Auto-refresh: 1.5 seconds)</small></div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>SSID</th>
+                        <th>BSSID</th>
+                        <th>Channel</th>
+                        <th>Band</th>
+                        <th>MACs</th>
+                        <th>AI Confidence / Rate</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="net-table">
+                    <tr><td colspan="7" style="text-align:center; color: var(--text-secondary);">Waiting for data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">🚨 Alert Log</div>
+            <div id="alert-log">
+                <div style="color: var(--text-secondary); text-align: center; margin-top: 50px;">
+                    No alerts yet...
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const socket = io({ 
+            transports: ['polling'],
+            reconnection: true,
+            reconnectionDelay: 1000
+        });
+        
+        let previousNetworks = {}; 
+        
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('timestamp').innerText = now.toTimeString().split(' ')[0];
+        }, 1000);
+        
+        socket.on('full_update', (data) => {
+            const indicator = document.getElementById('update-flash');
+            indicator.classList.add('flash');
+            setTimeout(() => indicator.classList.remove('flash'), 500);
+            
+            if (data.target_ssid) {
+                document.getElementById('target-ssid').innerText = data.target_ssid;
+            }
+            
+            document.getElementById('total-pkts').innerText = data.stats.total.toLocaleString();
+            document.getElementById('threat-count').innerText = data.stats.threats;
+            document.getElementById('band-24').innerText = data.stats.band_24;
+            document.getElementById('band-5').innerText = data.stats.band_5;
+            document.getElementById('trusted-count').innerText = data.stats.trusted;
+            document.getElementById('channel-count').innerText = data.stats.channels;
+            document.getElementById('deauth-total').innerText  = (data.stats.deauth_total || 0).toLocaleString();
+            document.getElementById('deauth-active').innerText = data.stats.deauth_active || 0;
+            
+            let rows = "";
+            data.networks.forEach(n => {
+                const confidence = n.confidence || 0;
+                const confClass = confidence > 80 ? 'high' : confidence > 50 ? 'medium' : 'low';
+                const prevType = previousNetworks[n.bssid];
+                const rowChanged = prevType && prevType !== n.type_class;
+                const changedClass = rowChanged ? ' row-changed' : '';
+                const isUnmanaged = n.type === 'UNMANAGED';
+
+                previousNetworks[n.bssid] = n.type_class;
+
+                const isDeauth = n.type === 'DEAUTH ATTACK' || n.type === 'DEAUTH ENDED';
+                const noConf = isUnmanaged;
+                let confCell;
+                if (isDeauth) {
+                    if (n.type === 'DEAUTH ATTACK' && n.confidence > 0) {
+                        const aiPart = (n.ai_conf > 0)
+                            ? ` <span style="color:#ff8888;font-size:0.75rem;">AI ${n.ai_conf}%</span>`
+                            : '';
+                        confCell = `<span style="color:#ff4444;font-weight:700;font-size:0.85rem;">${n.confidence}/s</span>${aiPart}`;
+                    } else {
+                        const aiPart = (n.ai_conf > 0)
+                            ? `<span style="color:#aa4444;font-size:0.8rem;">AI ${n.ai_conf}%</span>`
+                            : `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`;
+                        confCell = aiPart;
+                    }
+                } else if (noConf) {
+                    confCell = `<span style="color:var(--text-secondary);font-size:0.8rem;">—</span>`;
+                } else {
+                    confCell = `<div class="confidence-bar">
+                           <div class="confidence-fill ${confClass}" style="width:${confidence}%"></div>
+                       </div> ${confidence}%`;
+                }
+
+                rows += `<tr class="${n.type_class}${changedClass}">
+                    <td><strong>${n.ssid}</strong></td>
+                    <td><span class="mac-address">${n.bssid}</span></td>
+                    <td><span class="channel-badge">CH ${n.channel}</span></td>
+                    <td>${n.band}</td>
+                    <td>${n.mac_count}</td>
+                    <td>${confCell}</td>
+                    <td><span class="badge ${n.badge_class}">${n.type}</span></td>
+                </tr>`;
+            });
+            
+            document.getElementById('net-table').innerHTML = rows || '<tr><td colspan="7" style="text-align:center; color: var(--text-secondary);">No networks detected</td></tr>';
+            
+            let alerts = "";
+            data.alerts.forEach(a => {
+                const alertType = a.type || 'unmanaged';
+                alerts += `<div class="alert-item ${alertType}">
+                    <span class="alert-time">[${a.time}]</span> ${a.msg}
+                </div>`;
+            });
+            document.getElementById('alert-log').innerHTML = alerts || '<div style="color: var(--text-secondary); text-align: center; margin-top: 50px;">No alerts yet...</div>';
+        });
+        
+        socket.on('connect', () => console.log('✅ Connected'));
+        socket.on('disconnect', () => console.log('⚠️ Disconnected'));
+    </script>
+</body>
+</html>
