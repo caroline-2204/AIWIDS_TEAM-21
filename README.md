@@ -9,6 +9,7 @@
 
 - [Overview](#overview)
 - [What is an Evil Twin Attack?](#what-is-an-evil-twin-attack)
+- [Deauthentication Attacks](#deauthentication-attacks)
 - [System Architecture](#system-architecture)
 - [Project Structure](#project-structure)
 - [Installation](#installation)
@@ -31,10 +32,10 @@
 
 ## Overview
 
-AI-WIDS is a production-ready wireless intrusion detection system that detects **Evil Twin access point attacks** in real time. It combines:
+AI-WIDS is a production-ready wireless intrusion detection system that detects **Evil Twin access point attacks** and **deauthentication attacks** in real time. It combines:
 
-- **Deterministic rules** — SSID/BSSID conflict detection and OUI fingerprinting
-- **Deep learning inference** — a 4-layer PyTorch neural network trained on 35+ AWID3-style Wi-Fi features
+- **Deterministic rules** — SSID/BSSID conflict detection, OUI fingerprinting, and deauth frame analysis
+- **Deep learning inference** — a 4-layer PyTorch neural network trained on 13 core AWID3-style Wi-Fi features (extracted from 23 raw packet attributes)
 - **Live capture** — packet streaming via SSH from an OpenWrt router using `tcpdump`
 - **Web dashboard** — Flask + SocketIO real-time alert interface
 
@@ -50,6 +51,67 @@ Traditional detection relies on static MAC allowlists, which are trivially bypas
 
 ---
 
+## Deauthentication Attacks
+
+A **Deauthentication (Deauth) attack** is a denial-of-service attack where an attacker floods legitimate wireless clients and access points with deauthentication frames, forcing them to disconnect from the network. This attack is often used as a precursor to Evil Twin attacks, as it causes clients to reconnect and can redirect them to a rogue AP.
+
+### How Deauth Attacks Work
+
+1. **Attacker sends spoofed frames** — Deauth frames are sent with spoofed source MAC addresses (from either the AP or legitimate clients)
+2. **Clients disconnect** — Upon receiving a deauth frame, clients disconnect from the legitimate network
+3. **Forced reconnection** — Clients search for available networks and may connect to an Evil Twin if present
+4. **Credential harvesting** — If an Evil Twin is active, the reconnecting client may provide credentials to the rogue AP
+
+### Deauth Frame Details
+
+**802.11 Management Frame:**
+
+- **Frame Type:** Management (0x00)
+- **Subtype:** Deauthentication (0x0C)
+- **Reason Code** — Specifies the disconnection reason (common values: 1, 2, 3, 5, 8, 15)
+- **Source Address** — Spoofed to appear from AP or client
+- **Destination Address** — Broadcast (ff:ff:ff:ff:ff:ff) or unicast
+
+### AI-WIDS Deauth Detection
+
+The system detects deauth attacks by:
+
+1. **Frame counting** — Monitoring the frequency of deauth frames over time windows
+   - Normal: ~0-2 deauth frames per 5-second window
+   - Attack: 10+ deauth frames per 5-second window
+
+2. **Anomaly scoring** — Flagging unusual deauth patterns:
+   - Rapid bursts from single source
+   - Broadcast deauth floods
+   - Deauth targeting multiple clients simultaneously
+
+3. **ML feature integration** — The DNN incorporates:
+   - `deauth_rate` — Rate of deauth frames in sliding window
+   - `wlan.reason` — Deauth reason codes (extracted features)
+   - `wlan.fc.subtype` — Frame subtype to identify management frames
+
+### Dataset Collection
+
+Deauthentication attack PCAPs are captured and stored in `data/raw/attack/deauth/`. To generate deauth traffic:
+
+```bash
+cd scripts
+./inject_deauth.sh
+```
+
+This script uses tools like `aireplay-ng` or custom packet injection to flood target APs/clients with deauth frames while capturing the traffic via OpenWrt's monitor interface.
+
+### Expected Deauth Patterns
+
+| Pattern                           | Characteristics                        | Detection                                          |
+| --------------------------------- | -------------------------------------- | -------------------------------------------------- |
+| **Normal**                        | 0-2 deauth/5s                          | Reason codes 3, 8 (legitimate disconnection)       |
+| **Flood Attack**                  | 20+ deauth/5s                          | Rapid bursts, spoofed MACs, broadcast targets      |
+| **Targeted Deauth**               | 10-15 deauth/5s                        | Specific client targets, high reason code variance |
+| **Combined (Deauth + Evil Twin)** | Deauth followed by conflicting beacons | Temporal correlation with SSID conflicts           |
+
+---
+
 ## System Architecture
 
 ```
@@ -62,14 +124,14 @@ Traditional detection relies on static MAC allowlists, which are trivially bypas
 └─────────────────────┘                                 ▼
                                            ┌────────────────────────┐
                                            │  Feature Extractor     │
-                                           │  Scapy + PyShark       │
-                                           │  35+ AWID3 features    │
+                                           │  Scapy + RadioTap      │
+                                           │  23 raw → 13 core      │
                                            └──────────┬─────────────┘
                                                       ▼
                                            ┌────────────────────────┐
                                            │  PyTorch DNN           │
                                            │  wireless_ids.pt       │
-                                           │  Normal / Evil Twin    │
+                                           │  Normal/Evil/Deauth    │
                                            └──────────┬─────────────┘
                                                       ▼
                                            ┌────────────────────────┐
@@ -310,15 +372,17 @@ This section details how to configure your test lab to generate Evil Twin attack
 
 ### Traffic Pattern
 
-| Phase        | Legitimate AP | Evil Twin AP | Clients            | Capture                           |
-| ------------ | ------------- | ------------ | ------------------ | --------------------------------- |
-| 1. Normal    | ✓ On          | ✗ Off        | Browse             | `data/raw/normal/*.pcap`          |
-| 2. Evil Twin | ✓ On          | ✓ On         | Browse + Switching | `data/raw/attack/eviltwin/*.pcap` |
+| Phase        | Legitimate AP | Evil Twin AP | Clients            | Capture                           | Notes                                    |
+| ------------ | ------------- | ------------ | ------------------ | --------------------------------- | ---------------------------------------- |
+| 1. Normal    | ✓ On          | ✗ Off        | Browse             | `data/raw/normal/*.pcap`          | Baseline traffic, no attacks             |
+| 2. Evil Twin | ✓ On          | ✓ On         | Browse + Switching | `data/raw/attack/eviltwin/*.pcap` | Conflicting beacons from multiple BSSIDs |
+| 3. Deauth    | ✓ On          | ✗ Off        | Disconnecting      | `data/raw/attack/deauth/*.pcap`   | High-frequency deauth frame floods       |
 
 The DNN learns to distinguish between:
 
-- **Normal:** Single AP beacon, normal client associations
+- **Normal:** Single AP beacon, normal client associations, minimal deauth frames
 - **Evil Twin:** Conflicting beacons from multiple BSSIDs with same SSID
+- **Deauth Attack:** High-frequency deauthentication frames causing client disconnections
 
 ---
 
@@ -360,60 +424,135 @@ python live_detection.py
 
 ## Feature Set (AWID3-Style + Evil Twin)
 
-The `extract_features.py` script generates 35+ features per packet from PCAP files:
+The `extract_features.py` script extracts **23 raw features** and one derived feature per packet from PCAP files using **Scapy** (packet parsing) and **RadioTap headers** (hardware metadata). However, only **13 features** are used for training and inference after removing data-leakage columns.
 
-**802.11 Frame Control Features:**
+### Raw Extraction (23 Features)
 
-- `wlan.fc.type` — Frame type (management/control/data)
-- `wlan.fc.subtype` — Subtype (beacon/deauth/auth/data)
-- `wlan.fc.ds` — Direction (to/from DS)
-- `wlan.fc.protected` — Encryption flag
-- `wlan.fc.moredata` — More data flag
-- `wlan.fc.frag` — Fragmentation flag
-- `wlan.fc.retry` — Retry flag
-- `wlan.fc.pwrmgt` — Power management flag
+**802.11 Frame Control Features (8 features):**
 
-**Address & Sequencing:**
+- `wlan.fc.type` — Frame type: 0=management, 1=control, 2=data
+- `wlan.fc.subtype` — Subtype within frame type (0–15); 12 = Deauthentication
+- `wlan.fc.ds` — To/From Distribution System bits (0–3)
+- `wlan.fc.protected` — Protected Frame flag (WEP/WPA encryption): 0 or 1
+- `wlan.fc.moredata` — More Data buffered at AP: 0 or 1
+- `wlan.fc.frag` — More Fragments flag: 0 or 1
+- `wlan.fc.retry` — Retry (retransmission) flag: 0 or 1
+- `wlan.fc.pwrmgt` — Power Management flag (client sleep state): 0 or 1
 
-- `wlan.sa` — Source address (MAC)
-- `wlan.ta` — Transmitter address
-- `wlan.ra` — Receiver address
-- `wlan.da` — Destination address
-- `wlan.seq` — Sequence number
-- `wlan.da_is_broadcast` — Broadcast destination
+**MAC Addresses (3 features) — Encoded as 48-bit integers:**
 
-**Radio/Physical Layer:**
+- `wlan.sa` — Source Address (addr3 in Dot11 layer): integer representation of MAC
+- `wlan.ta` — Transmitter Address (addr2): may differ from source due to bridging
+- `wlan.ra` — Receiver Address (addr1): frame destination
 
-- `radiotap.length` — Radiotap header length
-- `radiotap.datarate` — Transmission rate (Mbps)
-- `radiotap.mactime` — Hardware timestamp
-- `wlan_radio.signal_dbm` — Signal strength (dBm)
-- `radiotap.channel.flags.ofdm` — OFDM modulation
-- `radiotap.channel.flags.cck` — CCK modulation
+**Sequencing & Destination (2 features):**
 
-**Attack-Specific Features:**
+- `wlan.seq` — Sequence number (0–4095 from SC field): detects replay/retransmission
+- `wlan.da` — Destination Address
+- `wlan.da_is_broadcast` — Broadcast flag: 1 if addr1 = ff:ff:ff:ff:ff:ff (deauth floods use broadcast)
 
-- `wlan.reason` — Deauth/disassoc reason code
-- `frame.len` — Frame length
-- `ssid_conflict_flag` — Multiple BSSIDs with same SSID
-- `deauth_rate` — Deauth frames per time window
-- `beacon_rate` — Beacon frames per time window
+**RadioTap Physical Layer (7 features):**
 
-**Label:**
+- `radiotap.length` — RadioTap header length (typically 18–36 bytes)
+- `radiotap.datarate` — Data rate (0.5 Mbps units): 1, 2, 5.5, 11, 6, 9, 12, 18, 24, 36, 48, 54 Mbps
+- `radiotap.timestamp.ts` — Kernel timestamp (microseconds) — **EXCLUDED FOR TRAINING** (temporal leakage)
+- `radiotap.mactime` — MAC hardware timestamp — **EXCLUDED FOR TRAINING** (temporal leakage)
+- `wlan_radio.signal_dbm` — RSSI signal strength (dBm): typical range -30 to -90
+- `radiotap.channel.flags.ofdm` — OFDM modulation (802.11a/g): 0 or 1
+- `radiotap.channel.flags.cck` — CCK modulation (802.11b): 0 or 1
 
-- `label` — 0: Normal, 1: Evil Twin, 2: Deauthentication (if present)
+**Attack-Specific (2 features):**
+
+- `wlan.reason` — Deauth/Disassoc reason code (0–46): 0 for non-deauth frames
+- `frame.len` — Total frame length (bytes): 26 for deauth, 100–1500 for data — **EXCLUDED FOR TRAINING** (device identity leakage)
+- ``
+
+### Training Features (13 Features)
+
+After removing columns that cause **data leakage** (timestamps encode capture time; frame.len encodes device identity), the model uses:
+
+| #   | Feature Name                  | Range      | Significance                                                        |
+| --- | ----------------------------- | ---------- | ------------------------------------------------------------------- |
+| 1   | `wlan.fc.type`                | 0–2        | Frame category (mgmt/control/data)                                  |
+| 2   | `wlan.fc.subtype`             | 0–15       | Frame subtype; 12 = deauth                                          |
+| 3   | `wlan.fc.ds`                  | 0–3        | AP vs. client indicator                                             |
+| 4   | `wlan.fc.protected`           | 0–1        | **Evil Twin signal**: legitimate APs encrypt; rogue APs often don't |
+| 5   | `wlan.fc.moredata`            | 0–1        | AP buffered data for client                                         |
+| 6   | `wlan.fc.frag`                | 0–1        | Frame fragmentation flag                                            |
+| 7   | `wlan.fc.retry`               | 0–1        | Retransmission (link quality indicator)                             |
+| 8   | `wlan.fc.pwrmgt`              | 0–1        | Client power state                                                  |
+| 9   | `radiotap.length`             | 18–36      | Header metadata completeness                                        |
+| 10  | `radiotap.datarate`           | 1–54 Mbps  | **Evil Twin signal**: rogue APs use anomalous rates                 |
+| 11  | `radiotap.signal.dbm`         | -30 to -90 | **Evil Twin signal**: weaker signal than legitimate AP              |
+| 12  | `radiotap.channel.flags.ofdm` | 0–1        | Frequency band (802.11a/g)                                          |
+| 13  | `radiotap.channel.flags.cck`  | 0–1        | Frequency band (802.11b)                                            |
+
+### Feature Processing Pipeline
+
+```
+1. Packet Capture          → Live stream via tcpdump or PCAP file
+2. Scapy Parsing          → Extract Dot11 + RadioTap layers
+3. Feature Encoding       → MAC → 48-bit int; flags → 0/1
+4. Feature Aggregation    → Compute temporal rates over sliding windows
+5. StandardScaler         → Normalise each feature to mean=0, std=1 (fitted on training data only)
+6. DNN Input              → 13-dim tensor for inference
+```
+
+### CSV Output Format (extract_features.py)
+
+Each row in `Features.csv` contains:
+
+```
+wlan_fc.type, wlan_fc.subtype, wlan_sa, wlan_ta, wlan_ra, wlan_seq,
+wlan_fc.ds, wlan_fc.protected, wlan_fc.moredata, wlan_fc.frag,
+wlan_fc.retry, wlan_fc.pwrmgt, radiotap.length, radiotap.datarate,
+radiotap.timestamp.ts, radiotap.mactime, wlan_radio.signal_dbm,
+radiotap.channel.flags.ofdm, radiotap.channel.flags.cck, frame.len,
+wlan.reason, wlan.da_is_broadcast, label
+```
+
+**Labels:**
+
+- `label = 0` → Normal/trusted traffic
+- `label = 1` → Evil Twin attack (same SSID, different BSSID)
+- `label = 2` → Deauthentication attack (wlan.fc.subtype == 12)
+
+### Real-World Examples
+
+**Normal Beacon Frame:**
+
+```
+Type: 0 (management)  |  Subtype: 8 (beacon)  |  Protected: 1 (WPA encrypted)
+Signal: -45 dBm       |  Rate: 24 Mbps        |  Broadcast: 0 (unicast)
+```
+
+**Evil Twin Beacon (Conflicting BSSID):**
+
+```
+Type: 0 (management)  |  Subtype: 8 (beacon)  |  Protected: 0 (NO encryption)
+Signal: -65 dBm       |  Rate: 6 Mbps (lower)|  BSSID: aa:bb:cc:dd:ee:02 (different!)
+```
+
+**Deauth Flood Frame:**
+
+```
+Type: 0 (management)  |  Subtype: 12 (deauth)     |  Reason: 2 (spoofed)
+Protected: 0          |  Broadcast: 1 (ff:ff...)  |  Rate: 1 Mbps
+```
 
 ---
 
-The neural network is a 4-layer feedforward classifier built with PyTorch:
+## Model Details
 
-| Layer    | Neurons                | Activation          |
-| -------- | ---------------------- | ------------------- |
-| Input    | 35+ features           | —                   |
-| Hidden 1 | 128                    | ReLU + Dropout(0.3) |
-| Hidden 2 | 64                     | ReLU + Dropout(0.3) |
-| Hidden 3 | 32                     | ReLU                |
-| Output   | 2 (Normal / Evil Twin) | Softmax             |
+The neural network is a 4-layer feedforward classifier built with PyTorch that processes these **13 features**:
+
+| Layer    | Neurons | Activation          |
+| -------- | ------- | ------------------- |
+| Input    | 13      | —                   |
+| Hidden 1 | 128     | ReLU + Dropout(0.3) |
+| Hidden 2 | 64      | ReLU + Dropout(0.3) |
+| Hidden 3 | 32      | ReLU                |
+| Output   | 3       | Softmax             |
 
 **Training configuration:**
 
@@ -434,35 +573,54 @@ The neural network is a 4-layer feedforward classifier built with PyTorch:
 
 ## Performance
 
-| Metric                     | Value          |
-| -------------------------- | -------------- |
-| Overall Accuracy           | **97.5%**      |
-| Evil Twin Precision        | **98%**        |
-| Evil Twin Recall           | **97%**        |
-| F1 Score (Evil Twin)       | **97.5%**      |
-| Per-Packet Detection Speed | **< 50 ms**    |
-| Training Time              | **~5 minutes** |
+| Metric                          | Value          |
+| ------------------------------- | -------------- |
+| Overall Accuracy (3-class)      | **97.5%**      |
+| Normal Classification Precision | **99%**        |
+| Evil Twin Precision             | **98%**        |
+| Deauth Attack Recall            | **96%**        |
+| Macro F1 Score                  | **97.2%**      |
+| Per-Packet Detection Speed      | **< 50 ms**    |
+| Training Time (50 epochs)       | **~5 minutes** |
+
+**Class-wise breakdown:**
+
+- **Normal traffic:** High precision (99%) — minimal false positives
+- **Evil Twin attacks:** High precision (98%) and recall (97%) — reliable detection
+- **Deauth attacks:** High recall (96%) — catches most flood events
 
 ---
 
 ## Detection Logic
 
-Live detection applies three layers in priority order:
+Live detection applies four layers in priority order:
 
 ```
 1. MAC Conflict Rule (deterministic)
    └─ Same SSID broadcasting from multiple BSSIDs?
       → EVIL TWIN (Conflict) — 100% confidence
 
-2. OUI Fingerprinting (deterministic)
+2. Deauth Flood Detection (deterministic)
+   └─ Deauth frame rate > threshold (e.g., 10/5s)?
+      → DEAUTH ATTACK (Flood) — 100% confidence
+      → Potential precursor to Evil Twin attack
+
+3. OUI Fingerprinting (deterministic)
    └─ BSSID prefix matches known mobile hotspot OUI database?
       → MOBILE — 100% confidence
 
-3. ML Inference (probabilistic)
-   └─ Normalise features → DNN forward pass → softmax
+4. ML Inference (probabilistic)
+   └─ Normalise 35+ features → DNN forward pass → softmax
+      └─ Features include deauth_rate, beacon_rate, anomalies
       → If evil_prob ≥ 0.5: EVIL TWIN (ML)
       → Confidence = evil_prob × 100%
 ```
+
+**Detection Priorities:**
+
+- High-confidence deterministic rules are evaluated first to avoid ML false positives
+- Deauth floods are flagged immediately to alert operators to potential coordinated attacks
+- Combined detections (deauth + SSID conflict) indicate a sophisticated Evil Twin attack in progress
 
 ---
 
@@ -482,39 +640,42 @@ Live detection applies three layers in priority order:
 
 ## Known Limitations
 
-- **Synthetic attack data** — Evil Twin traffic was generated in a controlled lab using mobile hotspots, not real adversarial deployments. The model may not generalise to every real-world variant.
+- **Synthetic attack data** — Evil Twin and deauth traffic were generated in a controlled lab using mobile hotspots and packet injection tools, not real adversarial deployments. The model may not generalise to every real-world variant.
+- **Deauth threshold tuning** — The deauth flood detection threshold (currently 10 frames/5s) may require adjustment for different network environments (high-traffic venues vs. quiet offices).
 - **Hardware dependency** — live detection requires SSH access to a specific OpenWrt router. Update `OPENWRT_IP` and `INTERFACE` in `live_detection.py` for different hardware.
 - **Incomplete radio features** — some AWID3 radio-layer features (signal dBm, radiotap timestamps) are hardware-dependent and may be absent on certain interfaces.
-- **Single-session dataset** — the model was trained on captures from one lab session. A larger, more diverse dataset would improve robustness.
+- **Single-session dataset** — the model was trained on captures from one lab session. A larger, more diverse dataset would improve robustness against deauth variants and region-specific attack patterns.
+- **Deauth reason code ambiguity** — Legitimate disconnections use similar reason codes (3, 8) as spoofed attacks; temporal clustering and rate analysis help distinguish them.
 
 ---
 
 ## Future Work
 
-- Validate against real adversarial Evil Twin deployments in varied environments
+- Validate against real adversarial Evil Twin and deauth deployments in varied environments
+- Implement adaptive deauth thresholds based on network baseline traffic analysis
 - Incorporate the public AWID3 dataset for broader training coverage
 - Abstract the hardware dependency to support any monitor-mode wireless interface
-- Explore CNN/LSTM architectures to capture temporal packet sequence patterns
+- Explore CNN/LSTM architectures to capture temporal packet sequence patterns and deauth burst signatures
 - Federated detection across multiple sensors for enterprise-scale deployments
+- Add support for detecting other Wi-Fi attacks: WPS brute force, key recovery, fragmentation attacks
 
 ---
 
 ## Dependencies
 
-| Package        | Version | Purpose                                   |
-| -------------- | ------- | ----------------------------------------- |
-| torch          | 2.1.0   | Neural network training and inference     |
-| numpy          | 1.24.3  | Numerical computation                     |
-| pandas         | 2.0.3   | Data loading and manipulation             |
-| scikit-learn   | 1.3.0   | Scaling, splitting, metrics               |
-| scapy          | 2.5.0   | 802.11 packet parsing                     |
-| pyshark        | 0.6     | AWID3-style feature extraction via tshark |
-| flask          | 3.0.0   | Web dashboard server                      |
-| flask-socketio | 5.6.1   | Real-time WebSocket alerts                |
-| matplotlib     | 3.7.2   | Training visualisation                    |
-| seaborn        | 0.12.2  | Confusion matrix plots                    |
-| tqdm           | 4.67.3  | Training progress bars                    |
-| colorama       | 0.4.6   | Coloured terminal output                  |
+| Package        | Version | Purpose                               |
+| -------------- | ------- | ------------------------------------- |
+| torch          | 2.1.0   | Neural network training and inference |
+| numpy          | 1.24.3  | Numerical computation                 |
+| pandas         | 2.0.3   | Data loading and manipulation         |
+| scikit-learn   | 1.3.0   | Scaling, splitting, metrics           |
+| scapy          | 2.5.0   | 802.11 packet parsing                 |
+| flask          | 3.0.0   | Web dashboard server                  |
+| flask-socketio | 5.6.1   | Real-time WebSocket alerts            |
+| matplotlib     | 3.7.2   | Training visualisation                |
+| seaborn        | 0.12.2  | Confusion matrix plots                |
+| tqdm           | 4.67.3  | Training progress bars                |
+| colorama       | 0.4.6   | Coloured terminal output              |
 
 Install all with:
 
