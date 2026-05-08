@@ -107,7 +107,7 @@ BASE_DIR     = os.path.dirname(os.path.abspath(__file__))   # .../src/
 PROJECT_ROOT = os.path.dirname(BASE_DIR)                    # .../ai-wids-complete/
 
 # All outputs land in data/model/ inside the project root
-MODEL_DIR    = os.path.join(PROJECT_ROOT, "data", "models")
+MODEL_DIR    = os.path.join(PROJECT_ROOT, "data", "model")
 PLOT_DIR     = os.path.join(MODEL_DIR, "plots")
 MODEL_PATH   = os.path.join(MODEL_DIR, "wireless_ids.pt")   # Main model output
 SCALER_PATH  = os.path.join(MODEL_DIR, "scaler.pkl")
@@ -739,7 +739,6 @@ def main(args):
     print(f"\n{BAK}{WHT} TRAINING COMPLETE {RST}")
     print(f"{GRN}Model saved: {MODEL_PATH}{RST}")
     print(f"{GRN}Next step  : python src/live_detection.py{RST}\n")
-
 
 
 # COMMAND-LINE ARGUMENTS
