@@ -102,11 +102,13 @@ ai-wids-complete/
 ├── data/
 │   ├── raw/
 │   │   ├── normal/              # Normal traffic PCAPs
-│   │   └── attack/              # Evil Twin PCAPs
+│   │   └── attack/              
+│   |         └──eviltwin/       # Evil Twin PCAPs
+│   |         └──deauth/         # DeAuth PCAPs 
 │   ├── processed/               # Features.csv (generated)
 │   └── models/
 │       └── wireless_ids.pt      # Pre-trained model (included)
-├── results/
+├── dashboard/
 │   └── training_dashboard.png   # Training metrics plot
 ├── scripts/
 │   ├── normal_traffic.sh        # Capture normal traffic via OpenWrt
