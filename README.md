@@ -166,23 +166,10 @@ ssh root@192.168.32.55 "iw dev phy0-mon0 set monitor none"
 
 ### 1. Collect Traffic
 
-Run the capture scripts from the `scripts/` directory. Each script SSHs into the OpenWrt router and streams packets back via `tcpdump`.
-
-**Normal traffic (5 minutes per capture, 2.4GHz + 5GHz):**
+Run the capture scripts from the `src/datacollect.py`. The script SSHs into the OpenWrt router and streams packets back via `tcpdump`.
 
 ```bash
-cd scripts
-chmod +x normal_traffic.sh
-./normal_traffic.sh
-```
-
-The script pauses between captures for you to set up the test devices. Follow the on-screen prompts. Output: `data/raw/normal/*.pcap`
-
-**Evil Twin attack traffic:**
-
-```bash
-chmod +x evil_twin.traffic.sh
-./evil_twin.traffic.sh
+python datacollect.py
 ```
 
 Before running, set up the lab:
@@ -191,7 +178,7 @@ Before running, set up the lab:
 2. **ET Phone** — enable a hotspot named `FreeWiFi` on Channel 1 (2.4GHz)
 3. **Phone A/B** — connect to the `FreeWiFi` network and browse normally
 
-Output: `data/raw/attack/*.pcap`
+Output: `data/raw/attack/*/*.pcap`
 
 ---
 
